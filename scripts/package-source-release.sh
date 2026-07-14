@@ -48,8 +48,12 @@ git archive --format=tar HEAD | tar -x -C "$stage"
 git -C "$DOTLOTTIE_DIR" archive --format=tar HEAD | tar -x -C "$stage/deps/dotlottie-rs"
 git -C "$THORVG_DIR" archive --format=tar HEAD | tar -x -C "$stage/deps/dotlottie-rs/dotlottie-rs/deps/thorvg"
 
-# Homebrew builds run without network access, so include every locked Cargo crate.
-cargo vendor --locked --manifest-path "$stage/Cargo.toml" "$stage/vendor" > "$stage/.cargo/config.toml"
+# Homebrew builds run without network access, so include every locked Cargo crate. Running from
+# the staged root makes Cargo write a portable, relative `directory = "vendor"` configuration.
+(
+    cd "$stage"
+    cargo vendor --locked vendor > .cargo/config.toml
+)
 
 tar -C "$workspace" -czf "$output" "lot-$version"
 shasum -a 256 "$output" > "$output.sha256"

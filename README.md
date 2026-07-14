@@ -29,7 +29,7 @@ To create the same archive locally:
 ```sh
 mise run fetch-dotlottie
 mise run package-source-release
-scripts/validate-source-release.sh dist/lot-0.1.0-source.tar.gz
+scripts/validate-source-release.sh dist/lot-<version>-source.tar.gz
 ```
 
 The input may be a local `.lottie` file, a Lottie JSON file, or a URL. URL loading reports
