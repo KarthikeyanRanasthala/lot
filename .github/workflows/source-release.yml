@@ -6,7 +6,7 @@ on:
       - release
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   source-release:
@@ -34,6 +34,7 @@ jobs:
             exit 1
           fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
 
       - name: Fetch dotlottie-rs and ThorVG
         run: mise run fetch-dotlottie
@@ -53,3 +54,15 @@ jobs:
             dist/lot-${{ steps.version.outputs.version }}-source.tar.gz.sha256
           if-no-files-found: error
           retention-days: 14
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            "dist/lot-${{ steps.version.outputs.version }}-source.tar.gz" \
+            "dist/lot-${{ steps.version.outputs.version }}-source.tar.gz.sha256" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "lot v${{ steps.version.outputs.version }}" \
+            --generate-notes

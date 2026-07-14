@@ -21,8 +21,8 @@ cargo run -- animation.lottie
 Pushing to the `release` branch produces a vendored source archive for the version in
 `Cargo.toml`. The workflow rejects an existing version tag, packages the pinned dotlottie-rs and
 ThorVG sources with Cargo's locked dependency set, and validates an offline release build on
-`macos-26`. It uploads the archive and its SHA-256 checksum as a 14-day workflow artifact; tagging
-and publishing remain deliberate follow-up steps.
+`macos-26`. After a successful validation, it creates the matching version tag and GitHub Release,
+attaching the archive and its SHA-256 checksum; it also keeps the files as 14-day workflow artifacts.
 
 To create the same archive locally:
 
