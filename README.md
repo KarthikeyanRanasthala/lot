@@ -1,7 +1,7 @@
 # lot
 
-Preview Lottie JSON and dotLottie animations in Kitty-graphics-compatible terminals, or render
-them as raw RGBA frames for tools such as `ffmpeg`.
+`lot` is `cat`, but for Lottie: preview Lottie JSON and dotLottie animations in
+Kitty-graphics-compatible terminals, or render them as raw RGBA frames for tools such as `ffmpeg`.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
 
@@ -35,7 +35,7 @@ Pass a local `.lottie` file, a Lottie JSON file, or an `http(s)` URL:
 ```sh
 lot animation.lottie
 lot animation.json
-lot https://example.com/animation.lottie
+lot https://lottie.host/294b684d-d6b4-4116-ab35-85ef566d4379/VkGHcqcMUI.lottie
 ```
 
 For dotLottie files, use the arrow keys or mouse wheel to choose an animation or theme. URL
@@ -72,7 +72,8 @@ downloads report progress in the terminal.
 the output to `ffmpeg`:
 
 ```sh
-lot animation.lottie --headless --width 512 --height 512 --fps 30 \
+lot https://lottiefiles.github.io/dotlottie-web/lottie/threads.json \
+  --headless --width 512 --height 512 --fps 30 \
   | ffmpeg -y -f rawvideo -pixel_format rgba -video_size 512x512 -framerate 30 -i - \
       -c:v libx264 -pix_fmt yuv420p output.mp4
 ```
