@@ -17,17 +17,6 @@ brew install KarthikeyanRanasthala/tap/lot
 
 Homebrew builds `lot` from its released source archive on your machine.
 
-### Build from source
-
-The pinned `dotlottie-rs` release and its ThorVG submodule are fetched shallowly into the ignored
-`deps/` directory before building.
-
-```sh
-mise install
-mise run fetch-dotlottie
-cargo run -- animation.lottie
-```
-
 ## Preview an animation
 
 Pass a local `.lottie` file, a Lottie JSON file, or an `http(s)` URL:
@@ -46,22 +35,22 @@ downloads report progress in the terminal.
 <table>
   <tr>
     <td width="50%" align="center">
-      <img src="docs/images/terminals/wezterm.png" alt="lot previewing an emoji animation in WezTerm" width="100%"><br>
-      <sub>WezTerm</sub>
-    </td>
-    <td width="50%" align="center">
       <img src="docs/images/terminals/kitty.png" alt="lot previewing an emoji animation in Kitty" width="100%"><br>
       <sub>Kitty</sub>
     </td>
-  </tr>
-  <tr>
     <td width="50%" align="center">
       <img src="docs/images/terminals/ghostty.png" alt="lot previewing an emoji animation in Ghostty" width="100%"><br>
       <sub>Ghostty</sub>
     </td>
+  </tr>
+  <tr>
     <td width="50%" align="center">
       <img src="docs/images/terminals/warp.png" alt="lot previewing an emoji animation in Warp" width="100%"><br>
       <sub>Warp</sub>
+    </td>
+    <td width="50%" align="center">
+      <img src="docs/images/terminals/wezterm.png" alt="lot previewing an emoji animation in WezTerm" width="100%"><br>
+      <sub>WezTerm</sub>
     </td>
   </tr>
 </table>
@@ -108,6 +97,17 @@ with a compatible Kitty-graphics implementation that `lot` currently recognizes:
 
 Frames are capped at 30 fps while the animation timeline follows wall-clock time. Other terminals
 remain usable as metadata viewers and show a renderer-unavailable state.
+
+## Build from source
+
+The pinned `dotlottie-rs` release and its ThorVG submodule are fetched shallowly into the ignored
+`deps/` directory before building.
+
+```sh
+mise install
+mise run fetch-dotlottie
+cargo run -- animation.lottie
+```
 
 ## Develop and release
 
