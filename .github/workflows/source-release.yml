@@ -75,20 +75,10 @@ jobs:
           - name: macOS Intel
             runner: macos-26-intel
             artifact: macos-intel
-          - name: Linux x86_64
-            runner: ubuntu-24.04
-            artifact: linux-x86_64
-          - name: Linux ARM64
-            runner: ubuntu-24.04-arm
-            artifact: linux-arm64
 
     steps:
       - name: Check out release branch
         uses: actions/checkout@v7
-
-      - name: Set up Homebrew on Linux
-        if: runner.os == 'Linux'
-        uses: Homebrew/actions/setup-homebrew@master
 
       - name: Download source release
         uses: actions/download-artifact@v5
@@ -202,7 +192,7 @@ jobs:
             release/bottles/*.tar.gz
             release/bottles/*.json
           )
-          test "${#assets[@]}" -ge 10
+          test "${#assets[@]}" -ge 6
 
           gh release create "$TAG" "${assets[@]}" \
             --repo "$GITHUB_REPOSITORY" \
