@@ -16,6 +16,22 @@ mise run fetch-dotlottie
 cargo run -- animation.lottie
 ```
 
+## Homebrew source releases
+
+Pushing to the `release` branch produces a vendored source archive for the version in
+`Cargo.toml`. The workflow rejects an existing version tag, packages the pinned dotlottie-rs and
+ThorVG sources with Cargo's locked dependency set, and validates an offline release build on
+`macos-26`. It uploads the archive and its SHA-256 checksum as a 14-day workflow artifact; tagging
+and publishing remain deliberate follow-up steps.
+
+To create the same archive locally:
+
+```sh
+mise run fetch-dotlottie
+mise run package-source-release
+scripts/validate-source-release.sh dist/lot-0.1.0-source.tar.gz
+```
+
 The input may be a local `.lottie` file, a Lottie JSON file, or a URL. URL loading reports
 download progress.
 

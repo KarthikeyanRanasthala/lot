@@ -1,0 +1,55 @@
+name: Verify source release
+
+on:
+  push:
+    branches:
+      - release
+
+permissions:
+  contents: read
+
+jobs:
+  source-release:
+    name: Package and verify source release
+    runs-on: macos-26
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out release branch
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: Install pinned Rust toolchain
+        uses: jdx/mise-action@v4
+
+      - name: Check that the version tag is unused
+        id: version
+        shell: bash
+        run: |
+          version="$(awk -F ' = ' '$1 == "version" { gsub(/"/, "", $2); print $2; exit }' Cargo.toml)"
+          tag="v${version}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null; then
+            echo "${tag} already exists; bump Cargo.toml before publishing another release." >&2
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch dotlottie-rs and ThorVG
+        run: mise run fetch-dotlottie
+
+      - name: Package vendored source
+        run: mise run package-source-release "dist/lot-${{ steps.version.outputs.version }}-source.tar.gz"
+
+      - name: Validate offline source build
+        run: mise run validate-source-release "dist/lot-${{ steps.version.outputs.version }}-source.tar.gz"
+
+      - name: Upload verified source archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: lot-${{ steps.version.outputs.version }}-source
+          path: |
+            dist/lot-${{ steps.version.outputs.version }}-source.tar.gz
+            dist/lot-${{ steps.version.outputs.version }}-source.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14

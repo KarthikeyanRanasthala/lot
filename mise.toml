@@ -4,3 +4,11 @@ rust = "1.97.0"
 [tasks.fetch-dotlottie]
 description = "Fetch dotlottie-rs v0.1.58 as a shallow local dependency"
 run = "scripts/fetch-dotlottie-rs.sh"
+
+[tasks.package-source-release]
+description = "Create a vendored source archive for Homebrew"
+run = "scripts/package-source-release.sh"
+
+[tasks.validate-source-release]
+description = "Verify a vendored source archive builds offline"
+run = "scripts/validate-source-release.sh"
