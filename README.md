@@ -41,6 +41,31 @@ lot https://example.com/animation.lottie
 For dotLottie files, use the arrow keys or mouse wheel to choose an animation or theme. URL
 downloads report progress in the terminal.
 
+### In action
+
+<table>
+  <tr>
+    <td width="50%" align="center">
+      <img src="docs/images/terminals/wezterm.png" alt="lot previewing an emoji animation in WezTerm" width="100%"><br>
+      <sub>WezTerm</sub>
+    </td>
+    <td width="50%" align="center">
+      <img src="docs/images/terminals/kitty.png" alt="lot previewing an emoji animation in Kitty" width="100%"><br>
+      <sub>Kitty</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center">
+      <img src="docs/images/terminals/ghostty.png" alt="lot previewing an emoji animation in Ghostty" width="100%"><br>
+      <sub>Ghostty</sub>
+    </td>
+    <td width="50%" align="center">
+      <img src="docs/images/terminals/warp.png" alt="lot previewing an emoji animation in Warp" width="100%"><br>
+      <sub>Warp</sub>
+    </td>
+  </tr>
+</table>
+
 ## Create an MP4
 
 `lot` can pipe rendered frames to any tool that accepts raw RGBA video. To create an MP4, pipe
@@ -82,28 +107,6 @@ with a compatible Kitty-graphics implementation that `lot` currently recognizes:
 
 Frames are capped at 30 fps while the animation timeline follows wall-clock time. Other terminals
 remain usable as metadata viewers and show a renderer-unavailable state.
-
-### In action
-
-<p align="center">
-  <img src="docs/images/terminals/wezterm.png" alt="lot previewing an emoji animation in WezTerm" width="900">
-</p>
-<p align="center"><em>WezTerm</em></p>
-
-<p align="center">
-  <img src="docs/images/terminals/kitty.png" alt="lot previewing an emoji animation in Kitty" width="900">
-</p>
-<p align="center"><em>Kitty</em></p>
-
-<p align="center">
-  <img src="docs/images/terminals/ghostty.png" alt="lot previewing an emoji animation in Ghostty" width="900">
-</p>
-<p align="center"><em>Ghostty</em></p>
-
-<p align="center">
-  <img src="docs/images/terminals/warp.png" alt="lot previewing an emoji animation in Warp" width="900">
-</p>
-<p align="center"><em>Warp</em></p>
 
 ## Develop and release
 
