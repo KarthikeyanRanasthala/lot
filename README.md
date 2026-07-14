@@ -15,7 +15,9 @@ Install `lot` from the published tap:
 brew install KarthikeyanRanasthala/tap/lot
 ```
 
-Homebrew builds `lot` from its released source archive on your machine.
+Homebrew downloads a prebuilt bottle on supported platforms. Where no matching
+bottle is available, it builds `lot` from its released source archive on your
+machine.
 
 ## Preview an animation
 

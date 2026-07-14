@@ -1,5 +1,17 @@
 # Decisions
 
+## 2026-07-15 — Publish native Homebrew bottles with the source release
+
+`lot` remains a Homebrew formula in `KarthikeyanRanasthala/tap`. Its release
+workflow packages the vendored source archive, builds native macOS and Linux
+bottles from that exact archive, and publishes every artifact to the same
+versioned GitHub Release. The tap formula is updated manually afterward with
+the source checksum and generated bottle checksums. This eliminates the
+Rust/LLVM build dependency for users with a matching bottle while retaining the
+vendored source archive as a fallback. macOS builds use Homebrew's normal
+ad-hoc signature path; no Developer ID certificate or notarization secret is
+required.
+
 ## 2026-07-14 — Headless output is a finite raw-RGBA stream
 
 `lot --headless` writes a single playback to standard output as contiguous `RGBA` frames, at the

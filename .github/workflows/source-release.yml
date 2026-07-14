@@ -1,4 +1,4 @@
-name: Verify source release
+name: Release lot
 
 on:
   push:
@@ -8,11 +8,17 @@ on:
 permissions:
   contents: write
 
+env:
+  HOMEBREW_NO_AUTO_UPDATE: "1"
+
 jobs:
   source-release:
     name: Package and verify source release
     runs-on: macos-26
     timeout-minutes: 30
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
 
     steps:
       - name: Check out release branch
@@ -45,14 +51,161 @@ jobs:
       - name: Validate offline source build
         run: mise run validate-source-release "dist/lot-${{ steps.version.outputs.version }}-source.tar.gz"
 
+      - name: Upload source release
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-release
+          path: |
+            dist/lot-${{ steps.version.outputs.version }}-source.tar.gz
+            dist/lot-${{ steps.version.outputs.version }}-source.tar.gz.sha256
+          if-no-files-found: error
+
+  bottle:
+    name: Bottle (${{ matrix.name }})
+    needs: source-release
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS Apple Silicon
+            runner: macos-26
+            artifact: macos-arm64
+          - name: macOS Intel
+            runner: macos-26-intel
+            artifact: macos-intel
+          - name: Linux x86_64
+            runner: ubuntu-24.04
+            artifact: linux-x86_64
+          - name: Linux ARM64
+            runner: ubuntu-24.04-arm
+            artifact: linux-arm64
+
+    steps:
+      - name: Check out release branch
+        uses: actions/checkout@v7
+
+      - name: Set up Homebrew on Linux
+        if: runner.os == 'Linux'
+        uses: Homebrew/actions/setup-homebrew@master
+
+      - name: Download source release
+        uses: actions/download-artifact@v5
+        with:
+          name: source-release
+          path: source-release
+
+      - name: Build and bottle the temporary formula
+        env:
+          VERSION: ${{ needs.source-release.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          source_archive="source-release/lot-${VERSION}-source.tar.gz"
+          source_sha256="$(shasum -a 256 "$source_archive" | awk '{print $1}')"
+          tap_dir="$RUNNER_TEMP/homebrew-lot-bottle-tap"
+
+          mkdir -p "$tap_dir/Formula"
+          cat > "$tap_dir/Formula/lot.rb" <<EOF
+          class Lot < Formula
+            desc "Inspect Lottie and dotLottie files in the terminal"
+            homepage "https://github.com/KarthikeyanRanasthala/lot"
+            url "file://${GITHUB_WORKSPACE}/${source_archive}"
+            sha256 "${source_sha256}"
+            license "MIT"
+
+            depends_on "rust" => :build
+
+            def install
+              system "cargo", "install", *std_cargo_args
+            end
+
+            test do
+              assert_match "Inspect Lottie", shell_output("#{bin}/lot --help")
+            end
+          end
+          EOF
+
+          git -C "$tap_dir" init --quiet
+          git -C "$tap_dir" add Formula/lot.rb
+          git -C "$tap_dir" -c user.name=lot-bottler -c user.email=lot-bottler@localhost \
+            commit --quiet -m "temporary lot formula"
+
+          git config --global protocol.file.allow always
+          brew tap lot/local "file://${tap_dir}"
+          brew install --build-bottle lot/local/lot
+          brew test lot/local/lot
+
+          mkdir bottles
+          brew bottle --json --no-rebuild \
+            --root-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}" \
+            lot/local/lot | tee "bottles/${{ matrix.artifact }}.dsl.txt"
+
+          bottle_path="$(find . -maxdepth 1 -type f -name "lot--${VERSION}.*.bottle*.tar.gz" -print -quit)"
+          bottle_json="$(find . -maxdepth 1 -type f -name "lot--${VERSION}.*.bottle*.json" -print -quit)"
+          test -n "$bottle_path"
+          test -n "$bottle_json"
+
+          asset_name="$(basename "$bottle_path" | sed 's/^lot--/lot-/')"
+          mv "$bottle_path" "bottles/${asset_name}"
+          mv "$bottle_json" "bottles/$(basename "$bottle_json")"
+
+      - name: Upload bottle metadata and archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: bottle-${{ matrix.artifact }}
+          path: bottles/
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish source archive and bottles
+    needs:
+      - source-release
+      - bottle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out release branch
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: Download source release
+        uses: actions/download-artifact@v5
+        with:
+          name: source-release
+          path: release/source
+
+      - name: Download bottle artifacts
+        uses: actions/download-artifact@v5
+        with:
+          pattern: bottle-*
+          path: release/bottles
+          merge-multiple: true
+
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.source-release.outputs.tag }}
+          VERSION: ${{ needs.source-release.outputs.version }}
+        shell: bash
         run: |
-          gh release create "${{ steps.version.outputs.tag }}" \
-            "dist/lot-${{ steps.version.outputs.version }}-source.tar.gz" \
-            "dist/lot-${{ steps.version.outputs.version }}-source.tar.gz.sha256" \
+          set -euo pipefail
+          shopt -s nullglob
+
+          assets=(
+            "release/source/lot-${VERSION}-source.tar.gz"
+            "release/source/lot-${VERSION}-source.tar.gz.sha256"
+            release/bottles/*.tar.gz
+            release/bottles/*.json
+          )
+          test "${#assets[@]}" -ge 10
+
+          gh release create "$TAG" "${assets[@]}" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "lot v${{ steps.version.outputs.version }}" \
+            --title "lot v${VERSION}" \
             --generate-notes
