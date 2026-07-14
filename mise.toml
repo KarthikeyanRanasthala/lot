@@ -1,2 +1,6 @@
 [tools]
 rust = "1.97.0"
+
+[tasks.fetch-dotlottie]
+description = "Fetch dotlottie-rs v0.1.58 as a shallow local dependency"
+run = "scripts/fetch-dotlottie-rs.sh"

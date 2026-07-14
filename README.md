@@ -37,3 +37,18 @@
 
 - leave proper code comments explaining why a certain decision is taken, what a block of code does. keep it short and precise
 - keep a decision log with timestamps in a separate md file
+
+### setup
+
+Fetch the pinned `dotlottie-rs` release before building. The task shallow-clones the release into
+the ignored `deps/` directory so Cargo can use a local, reproducible dependency checkout.
+
+```sh
+mise install
+mise run fetch-dotlottie
+cargo run -- animation.lottie
+```
+
+The current implementation validates Lottie JSON and dotLottie containers and shows their
+metadata in the TUI. Rendering, terminal image protocols, and headless raw-frame output are
+intentionally deferred; `--headless` therefore reports that a renderer is not available.
