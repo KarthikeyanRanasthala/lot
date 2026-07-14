@@ -1,5 +1,13 @@
 # Decisions
 
+## 2026-07-14 — Headless output is a finite raw-RGBA stream
+
+`lot --headless` writes a single playback to standard output as contiguous `RGBA` frames, at the
+requested output rate. It emits no headers or progress on standard output, so it composes directly
+with raw-video consumers such as `ffmpeg`; diagnostics remain on standard error. The frame count
+is the animation duration times the requested rate, rounded up, and looping is disabled so exports
+terminate predictably. Container encoding, audio, and looping policy remain the consumer's job.
+
 ## 2026-07-14 — Metadata-first initial release (superseded)
 
 The first TUI used `dotlottie-rs` v0.1.58 with only its `dotlottie` feature enabled. This let the

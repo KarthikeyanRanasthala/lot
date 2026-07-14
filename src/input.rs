@@ -150,6 +150,43 @@ impl LoadedInput {
         }
     }
 
+    pub fn animation_index(&self, animation_id: Option<&str>) -> Result<usize> {
+        let Some(animation_id) = animation_id else {
+            return Ok(self.default_animation_index());
+        };
+
+        match self {
+            Self::Json { .. } => bail!("--animation-id is only available for dotLottie inputs"),
+            Self::DotLottie { animations, .. } => animations
+                .iter()
+                .position(|animation| animation.id == animation_id)
+                .ok_or_else(|| anyhow!("dotLottie animation `{animation_id}` was not found")),
+        }
+    }
+
+    pub fn theme_id(
+        &self,
+        animation_index: usize,
+        requested_theme_id: Option<&str>,
+    ) -> Result<Option<&str>> {
+        let Some(theme_id) = requested_theme_id else {
+            return Ok(self
+                .selected_animation(animation_index)
+                .initial_theme_id
+                .as_deref());
+        };
+
+        if !self.is_dotlottie() {
+            bail!("--theme is only available for dotLottie inputs");
+        }
+
+        self.themes()
+            .iter()
+            .find(|theme| theme.id == theme_id)
+            .map(|theme| Some(theme.id.as_str()))
+            .ok_or_else(|| anyhow!("dotLottie theme `{theme_id}` was not found"))
+    }
+
     pub fn initial_theme_index(&self, animation_index: usize) -> Option<usize> {
         let initial_theme_id = self
             .selected_animation(animation_index)
@@ -254,5 +291,14 @@ mod tests {
     #[test]
     fn rejects_non_object_json() {
         assert!(LoadedInput::from_bytes(br#"[]"#).is_err());
+    }
+
+    #[test]
+    fn rejects_dotlottie_selections_for_json_inputs() {
+        let input =
+            LoadedInput::from_bytes(br#"{"w":320,"h":180,"fr":30,"ip":0,"op":60}"#).unwrap();
+
+        assert!(input.animation_index(Some("other")).is_err());
+        assert!(input.theme_id(0, Some("dark")).is_err());
     }
 }

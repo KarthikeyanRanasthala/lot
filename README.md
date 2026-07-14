@@ -53,8 +53,25 @@ graphics protocol. Frames are capped at 30 fps while their timeline continues at
 | Ghostty | Stable single ID |
 | Warp | Stable single ID |
 
-Other terminals remain usable as metadata viewers and show a renderer-unavailable state. Headless
-raw-frame output is planned but not implemented.
+Other terminals remain usable as metadata viewers and show a renderer-unavailable state.
+
+## Headless output
+
+Use `--headless` to write one playback as tightly-packed RGBA frames to standard output. All of
+`--width`, `--height`, and `--fps` are required. The stream has no container headers: every frame
+is exactly `width × height × 4` bytes in RGBA byte order. Diagnostics, including download progress
+for URL inputs, remain on standard error so they do not corrupt the video stream.
+
+```sh
+cargo run -- assets/animation.lottie --headless --width 512 --height 512 --fps 30 \
+  | ffmpeg -y -f rawvideo -pixel_format rgba -video_size 512x512 -framerate 30 -i - \
+      -c:v libx264 -pix_fmt yuv420p output.mp4
+```
+
+For dotLottie inputs, `--animation-id` selects a manifest animation and `--theme` selects a
+manifest theme. Without either flag, the file's default animation and initial theme are used.
+The renderer stops after one animation pass; use the output tool to loop or otherwise package the
+video. `--animation-id` and `--theme` are rejected for standalone Lottie JSON inputs.
 
 ## Documentation
 

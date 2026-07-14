@@ -13,14 +13,29 @@ lot <url>
 URL loading should report download progress. dotLottie containers and standalone JSON are
 validated with dotlottie-rs before entering the TUI.
 
-The planned headless interface is:
+The headless interface is:
 
 ```sh
 lot animation.lottie --headless --width <number> --height <number> --fps <number> \
   --animation-id <string> --theme <string>
 ```
 
-It will emit raw frames suitable for piping to tools such as `ffmpeg`. It is not implemented yet.
+It emits one animation pass as tightly-packed RGBA frames suitable for piping to tools such as
+`ffmpeg`. `--width`, `--height`, and `--fps` are required. Output contains no container headers,
+progress, or terminal escape sequences: each frame is exactly `width × height × 4` bytes in RGBA
+byte order. Consumers must be given the same dimensions and frame rate passed to `lot`; diagnostics
+are written to standard error. Headless playback does not loop and ends after the selected
+animation's duration.
+
+```sh
+lot animation.lottie --headless --width 512 --height 512 --fps 30 \
+  | ffmpeg -f rawvideo -pixel_format rgba -video_size 512x512 -framerate 30 -i - \
+      -c:v libx264 -pix_fmt yuv420p output.mp4
+```
+
+`--animation-id` and `--theme` select IDs declared in a dotLottie manifest. They are invalid for
+standalone Lottie JSON input; omitting them uses the manifest-default animation and its optional
+initial theme.
 
 ## Rendering
 

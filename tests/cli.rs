@@ -13,22 +13,24 @@ fn exposes_headless_options_in_help() {
 }
 
 #[test]
-fn explains_that_headless_rendering_is_not_available() {
+fn writes_raw_rgba_frames_in_headless_mode() {
+    let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/two_frames.json");
+
     Command::cargo_bin("lot")
         .unwrap()
         .args([
-            "animation.json",
+            fixture,
             "--headless",
             "--width",
-            "100",
+            "4",
             "--height",
-            "100",
+            "3",
             "--fps",
-            "30",
+            "5",
         ])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "headless frame output is not available yet",
-        ));
+        .success()
+        .stdout(predicate::function(|output: &[u8]| {
+            output.len() == 5 * 4 * 3 * 4
+        }));
 }

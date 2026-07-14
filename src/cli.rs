@@ -8,7 +8,7 @@ pub struct Command {
     /// A local .json/.lottie file or an http(s) URL.
     pub input: String,
 
-    /// Request raw frame output. Rendering is intentionally not available yet.
+    /// Write one animation pass as raw RGBA frames to standard output.
     #[arg(long, requires_all = ["width", "height", "fps"])]
     pub headless: bool,
 

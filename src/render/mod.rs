@@ -6,6 +6,8 @@ use anyhow::{Context, Result, anyhow};
 use dotlottie_rs::{ColorSpace, Player};
 use std::{env, ffi::CString, io::Write, time::Duration};
 
+pub mod headless;
+
 /// CPU-backed Lottie playback that exposes each rendered frame as straight RGBA bytes.
 pub struct AnimationRenderer {
     player: Player,
@@ -65,7 +67,7 @@ impl AnimationRenderer {
                 .map_err(|error| anyhow!("could not apply dotLottie theme: {error:?}"))?;
         }
 
-        // The interactive preview should remain alive until the user changes animation or exits.
+        // Callers that need a finite export disable looping after construction.
         player.set_loop(true);
         player
             .play()
@@ -96,6 +98,10 @@ impl AnimationRenderer {
             self.copy_rgba();
         }
         Ok(changed)
+    }
+
+    pub fn set_looping(&mut self, looping: bool) {
+        self.player.set_loop(looping);
     }
 
     fn copy_rgba(&mut self) {
