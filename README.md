@@ -22,7 +22,7 @@ Pushing to the `release` branch produces a vendored source archive for the versi
 `Cargo.toml`. The workflow rejects an existing version tag, packages the pinned dotlottie-rs and
 ThorVG sources with Cargo's locked dependency set, and validates an offline release build on
 `macos-26`. After a successful validation, it creates the matching version tag and GitHub Release,
-attaching the archive and its SHA-256 checksum; it also keeps the files as 14-day workflow artifacts.
+attaching the archive and its SHA-256 checksum.
 
 To create the same archive locally:
 

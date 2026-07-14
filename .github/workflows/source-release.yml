@@ -45,16 +45,6 @@ jobs:
       - name: Validate offline source build
         run: mise run validate-source-release "dist/lot-${{ steps.version.outputs.version }}-source.tar.gz"
 
-      - name: Upload verified source archive
-        uses: actions/upload-artifact@v7
-        with:
-          name: lot-${{ steps.version.outputs.version }}-source
-          path: |
-            dist/lot-${{ steps.version.outputs.version }}-source.tar.gz
-            dist/lot-${{ steps.version.outputs.version }}-source.tar.gz.sha256
-          if-no-files-found: error
-          retention-days: 14
-
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
