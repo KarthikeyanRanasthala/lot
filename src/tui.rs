@@ -1,4 +1,6 @@
 use crate::input::{AnimationInfo, LoadedInput, ThemeInfo};
+use crate::render::{KittyPlayback, kitty_strategy_from_environment};
+use crate::terminal::kitty::PreviewArea;
 use anyhow::Result;
 use crossterm::{
     event::{
@@ -15,9 +17,17 @@ use ratatui::{
     text::Line,
     widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph, Wrap},
 };
-use std::{io, time::Duration};
+use std::{
+    io,
+    time::{Duration, Instant},
+};
 
 const PRIMARY: Color = Color::Rgb(1, 157, 145);
+// Until terminal pixel metrics are queried, these values keep the render target and Kitty cell
+// placement in one consistent, conservative coordinate system.
+const ESTIMATED_CELL_WIDTH_PX: u32 = 12;
+const ESTIMATED_CELL_HEIGHT_PX: u32 = 24;
+const PRESENT_INTERVAL: Duration = Duration::from_micros(1_000_000 / 30);
 
 pub fn run(input: LoadedInput) -> Result<()> {
     enable_raw_mode()?;
@@ -42,27 +52,100 @@ fn run_loop(
     input: LoadedInput,
 ) -> Result<()> {
     let mut app = App::new(input);
-    loop {
-        terminal.draw(|frame| draw(frame, &app))?;
-        if !event::poll(Duration::from_millis(100))? {
-            continue;
-        }
-        match event::read()? {
-            Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
-                KeyCode::Esc => return Ok(()),
-                KeyCode::Down => app.next(),
-                KeyCode::Up => app.previous(),
-                KeyCode::Tab => app.toggle_focus(),
+    let mut playback = None;
+    let mut playback_error = None;
+    let mut last_tick = Instant::now();
+    let mut needs_present = false;
+
+    let result = (|| -> Result<()> {
+        loop {
+            let preview = preview_content_area(preview_area(terminal.size()?.into(), &app.input));
+            let (render_width, render_height) =
+                target_dimensions(&app.input, app.animation_index, preview);
+            let target = preview_target(preview, render_width, render_height)?;
+            let theme_id = app.selected_theme_id().map(str::to_owned);
+            if playback.as_ref().is_none_or(|playback: &KittyPlayback| {
+                !playback.matches(app.animation_index, theme_id.as_deref(), target)
+            }) {
+                if let Some(playback) = playback.as_mut() {
+                    playback.clear(terminal.backend_mut())?;
+                }
+                match kitty_strategy_from_environment() {
+                    Some(strategy) => match KittyPlayback::new(
+                        &app.input,
+                        app.animation_index,
+                        theme_id.as_deref(),
+                        target,
+                        render_width,
+                        render_height,
+                        strategy,
+                    ) {
+                        Ok(next_playback) => {
+                            playback = Some(next_playback);
+                            playback_error = None;
+                            needs_present = true;
+                        }
+                        Err(error) => {
+                            playback = None;
+                            playback_error = Some(error.to_string());
+                            needs_present = false;
+                        }
+                    },
+                    None => {
+                        playback = None;
+                        playback_error = None;
+                        needs_present = false;
+                    }
+                }
+            }
+
+            terminal
+                .draw(|frame| draw(frame, &app, playback.is_some(), playback_error.as_deref()))?;
+            if let Some(playback) = playback.as_mut() {
+                if needs_present {
+                    playback.present(terminal.backend_mut())?;
+                    needs_present = false;
+                    last_tick = Instant::now();
+                } else {
+                    let now = Instant::now();
+                    let elapsed = now.saturating_duration_since(last_tick);
+                    if elapsed >= PRESENT_INTERVAL {
+                        // Render only when an image can be presented. The elapsed wall-clock
+                        // delta still includes prior rendering and I/O, so playback stays real-time.
+                        last_tick = now;
+                        let frame_changed = playback.advance(elapsed)?;
+                        if frame_changed {
+                            playback.present(terminal.backend_mut())?;
+                        }
+                    }
+                }
+            }
+
+            if !event::poll(Duration::from_millis(16))? {
+                continue;
+            }
+            match event::read()? {
+                Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
+                    KeyCode::Esc => return Ok(()),
+                    KeyCode::Down => app.next(),
+                    KeyCode::Up => app.previous(),
+                    KeyCode::Tab => app.toggle_focus(),
+                    _ => {}
+                },
+                Event::Mouse(mouse) => match mouse.kind {
+                    MouseEventKind::ScrollDown => app.next(),
+                    MouseEventKind::ScrollUp => app.previous(),
+                    _ => {}
+                },
                 _ => {}
-            },
-            Event::Mouse(mouse) => match mouse.kind {
-                MouseEventKind::ScrollDown => app.next(),
-                MouseEventKind::ScrollUp => app.previous(),
-                _ => {}
-            },
-            _ => {}
+            }
         }
+    })();
+
+    if let Some(playback) = playback.as_mut() {
+        let _ = playback.clear(terminal.backend_mut());
     }
+    result
 }
 
 #[derive(Clone, Copy)]
@@ -74,48 +157,65 @@ enum Focus {
 struct App {
     input: LoadedInput,
     animation_index: usize,
-    theme_index: usize,
+    theme_index: Option<usize>,
     focus: Focus,
 }
 
 impl App {
     fn new(input: LoadedInput) -> Self {
+        let animation_index = input.default_animation_index();
         Self {
+            theme_index: input.initial_theme_index(animation_index),
             input,
-            animation_index: 0,
-            theme_index: 0,
+            animation_index,
             focus: Focus::Animations,
         }
     }
 
     fn next(&mut self) {
-        let len = self.focused_len();
-        if len > 0 {
-            let index = self.focused_index_mut();
-            *index = (*index + 1) % len;
+        match self.focus {
+            Focus::Animations => {
+                let len = self.input.animations().len();
+                if len > 0 {
+                    self.animation_index = (self.animation_index + 1) % len;
+                    self.theme_index = self.input.initial_theme_index(self.animation_index);
+                }
+            }
+            Focus::Themes => {
+                let len = self.input.themes().len().saturating_add(1);
+                if len > 0 {
+                    let selected = self.theme_index.map_or(0, |index| index + 1);
+                    let next = (selected + 1) % len;
+                    self.theme_index = next.checked_sub(1);
+                }
+            }
         }
     }
 
     fn previous(&mut self) {
-        let len = self.focused_len();
-        if len > 0 {
-            let index = self.focused_index_mut();
-            *index = (*index + len - 1) % len;
+        match self.focus {
+            Focus::Animations => {
+                let len = self.input.animations().len();
+                if len > 0 {
+                    self.animation_index = (self.animation_index + len - 1) % len;
+                    self.theme_index = self.input.initial_theme_index(self.animation_index);
+                }
+            }
+            Focus::Themes => {
+                let len = self.input.themes().len().saturating_add(1);
+                if len > 0 {
+                    let selected = self.theme_index.map_or(0, |index| index + 1);
+                    let previous = (selected + len - 1) % len;
+                    self.theme_index = previous.checked_sub(1);
+                }
+            }
         }
     }
 
-    fn focused_len(&self) -> usize {
-        match self.focus {
-            Focus::Animations => self.input.animations().len(),
-            Focus::Themes => self.input.themes().len(),
-        }
-    }
-
-    fn focused_index_mut(&mut self) -> &mut usize {
-        match self.focus {
-            Focus::Animations => &mut self.animation_index,
-            Focus::Themes => &mut self.theme_index,
-        }
+    fn selected_theme_id(&self) -> Option<&str> {
+        self.theme_index
+            .and_then(|index| self.input.themes().get(index))
+            .map(|theme| theme.id.as_str())
     }
 
     fn toggle_focus(&mut self) {
@@ -129,7 +229,7 @@ impl App {
     }
 }
 
-fn draw(frame: &mut Frame, app: &App) {
+fn draw(frame: &mut Frame, app: &App, is_rendering: bool, playback_error: Option<&str>) {
     let outer = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -144,9 +244,9 @@ fn draw(frame: &mut Frame, app: &App) {
             .constraints([Constraint::Length(30), Constraint::Min(28)])
             .split(area);
         draw_sidebar(frame, columns[0], app);
-        draw_preview(frame, columns[1], app);
+        draw_preview(frame, columns[1], app, is_rendering, playback_error);
     } else {
-        draw_preview(frame, area, app);
+        draw_preview(frame, area, app, is_rendering, playback_error);
     }
 }
 
@@ -207,9 +307,11 @@ fn draw_themes(frame: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
-    let items = themes.iter().map(theme_item).collect::<Vec<_>>();
+    let items = std::iter::once(ListItem::new(Line::from("Default")))
+        .chain(themes.iter().map(theme_item))
+        .collect::<Vec<_>>();
     let mut state = ListState::default();
-    state.select(Some(app.theme_index));
+    state.select(Some(app.theme_index.map_or(0, |index| index + 1)));
     let list = List::new(items)
         .block(panel(&title, matches!(app.focus, Focus::Themes)))
         .highlight_style(
@@ -222,9 +324,20 @@ fn draw_themes(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_stateful_widget(list, area, &mut state);
 }
 
-fn draw_preview(frame: &mut Frame, area: Rect, app: &App) {
+fn draw_preview(
+    frame: &mut Frame,
+    area: Rect,
+    app: &App,
+    is_rendering: bool,
+    playback_error: Option<&str>,
+) {
     let animation = app.input.selected_animation(app.animation_index);
-    let block = panel(" Preview · renderer unavailable ", true).title_bottom(
+    let title = if is_rendering {
+        " Preview · Kitty graphics "
+    } else {
+        " Preview · renderer unavailable "
+    };
+    let block = panel(title, true).title_bottom(
         Line::from(metadata_values(animation))
             .centered()
             .style(Style::default().fg(Color::Gray)),
@@ -238,17 +351,21 @@ fn draw_preview(frame: &mut Frame, area: Rect, app: &App) {
         message_height,
     );
     frame.render_widget(block, area);
-    frame.render_widget(
-        Paragraph::new(vec![
-            Line::from("Rendering is not enabled yet"),
-            Line::from(""),
-            Line::from("This build has loaded and validated the animation."),
-            Line::from("A terminal renderer will appear here in a later release."),
-        ])
-        .alignment(Alignment::Center)
-        .style(Style::default().fg(Color::White)),
-        message_area,
-    );
+    if !is_rendering {
+        let detail = playback_error
+            .unwrap_or("This terminal does not expose a supported graphics protocol.");
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::from("Rendering unavailable"),
+                Line::from(""),
+                Line::from(detail),
+            ])
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(Color::White))
+            .wrap(Wrap { trim: true }),
+            message_area,
+        );
+    }
 }
 
 fn panel(title: &str, active: bool) -> Block<'_> {
@@ -288,4 +405,91 @@ fn metadata_values(animation: &AnimationInfo) -> String {
 fn count_label(count: usize, singular: &str) -> String {
     let suffix = if count == 1 { "" } else { "s" };
     format!("{count} {singular}{suffix}")
+}
+
+fn preview_area(area: Rect, input: &LoadedInput) -> Rect {
+    let inner = Rect::new(
+        area.x.saturating_add(1),
+        area.y.saturating_add(1),
+        area.width.saturating_sub(2),
+        area.height.saturating_sub(2),
+    );
+    if input.is_dotlottie() {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(30), Constraint::Min(28)])
+            .split(inner)[1]
+    } else {
+        inner
+    }
+}
+
+fn preview_content_area(area: Rect) -> Rect {
+    Rect::new(
+        area.x.saturating_add(1),
+        area.y.saturating_add(1),
+        area.width.saturating_sub(2),
+        area.height.saturating_sub(2),
+    )
+}
+
+fn preview_target(area: Rect, render_width: u32, render_height: u32) -> Result<PreviewArea> {
+    let columns = cells_for_pixels(render_width, ESTIMATED_CELL_WIDTH_PX).min(area.width);
+    let rows = cells_for_pixels(render_height, ESTIMATED_CELL_HEIGHT_PX).min(area.height);
+    PreviewArea::new(
+        area.x
+            .saturating_add(area.width.saturating_sub(columns) / 2)
+            .saturating_add(1),
+        area.y
+            .saturating_add(area.height.saturating_sub(rows) / 2)
+            .saturating_add(1),
+        columns,
+        rows,
+    )
+    .map_err(Into::into)
+}
+
+fn cells_for_pixels(pixels: u32, estimated_cell_pixels: u32) -> u16 {
+    u16::try_from(pixels.div_ceil(estimated_cell_pixels)).unwrap_or(u16::MAX)
+}
+
+fn target_dimensions(input: &LoadedInput, animation_index: usize, area: Rect) -> (u32, u32) {
+    let animation = input.selected_animation(animation_index);
+    let source_width = animation
+        .width
+        .and_then(|width| u32::try_from(width).ok())
+        .unwrap_or(320);
+    let source_height = animation
+        .height
+        .and_then(|height| u32::try_from(height).ok())
+        .unwrap_or(180);
+    let fallback_width = u32::from(area.width)
+        .saturating_mul(ESTIMATED_CELL_WIDTH_PX)
+        .clamp(1, 640);
+    let fallback_height = u32::from(area.height)
+        .saturating_mul(ESTIMATED_CELL_HEIGHT_PX)
+        .clamp(1, 480);
+    let scale = (fallback_width as f64 / source_width as f64)
+        .min(fallback_height as f64 / source_height as f64)
+        .min(1.0);
+    (
+        (source_width as f64 * scale).round().max(1.0) as u32,
+        (source_height as f64 * scale).round().max(1.0) as u32,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::preview_target;
+    use ratatui::layout::Rect;
+
+    #[test]
+    fn placement_is_centered_and_matches_the_rendered_pixel_size() {
+        let target = preview_target(Rect::new(20, 5, 100, 50), 512, 512).unwrap();
+
+        assert_eq!(target.column, 49);
+        assert_eq!(target.row, 20);
+        assert_eq!(target.columns, 43);
+        assert_eq!(target.rows, 22);
+    }
 }

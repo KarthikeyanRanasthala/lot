@@ -9,7 +9,7 @@
 ## tech
 
 - rust (use std libs and public crates as much as possible)
-- use ratatui & ratatui-image lib
+- use ratatui; own the small terminal-image transport so its buffering policy can match each terminal
 - dotlottie-rs should be fetched from https://github.com/lottiefiles/dotlottie-rs lib, choose the latest tag, use a shallow clone as we're operating in a metered network, may be create a mise bash script for it
 - ensure we're only including necessary features in cargo.toml
 
@@ -40,8 +40,9 @@
 
 ### setup
 
-Fetch the pinned `dotlottie-rs` release before building. The task shallow-clones the release into
-the ignored `deps/` directory so Cargo can use a local, reproducible dependency checkout.
+Fetch the pinned `dotlottie-rs` release before building. The task shallow-clones the release and
+its ThorVG submodule into the ignored `deps/` directory so Cargo can use a local, reproducible
+dependency checkout without downloading its full history.
 
 ```sh
 mise install
@@ -49,6 +50,15 @@ mise run fetch-dotlottie
 cargo run -- animation.lottie
 ```
 
-The current implementation validates Lottie JSON and dotLottie containers and shows their
-metadata in the TUI. Rendering, terminal image protocols, and headless raw-frame output are
-intentionally deferred; `--headless` therefore reports that a renderer is not available.
+The TUI validates Lottie JSON and dotLottie containers, then renders frames through
+`dotlottie-rs`'s CPU/ThorVG backend when the terminal supports the Kitty graphics protocol.
+It follows a dotLottie manifest's default animation and initial theme; packaged images and fonts,
+and ThorVG Lottie expressions, are enabled. Animation background metadata is intentionally ignored.
+When packaged themes are available, the TUI also exposes `Default` to restore the animation's
+unthemed source colors.
+Kitty uses double-buffered image IDs; Ghostty and Warp use a stable single image ID. WezTerm can
+be detected automatically and uses double-buffered image IDs.
+Other terminals continue to show metadata and a clear renderer-unavailable state. Headless
+raw-frame output is not implemented yet, so `--headless` reports that it is unavailable.
+To avoid queuing raw image transfers faster than a terminal can display them, interactive image
+updates are capped at 30 fps while the animation timeline continues at real time.

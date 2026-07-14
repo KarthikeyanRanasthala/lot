@@ -7,9 +7,10 @@ license = "MIT"
 
 [dependencies]
 anyhow = "1.0.100"
+base64 = "0.22.1"
 clap = { version = "4.5.60", features = ["derive"] }
 crossterm = "0.29.0"
-dotlottie-rs = { path = "deps/dotlottie-rs/dotlottie-rs", default-features = false, features = ["dotlottie"] }
+dotlottie-rs = { path = "deps/dotlottie-rs/dotlottie-rs", default-features = false, features = ["dotlottie", "theming", "tvg", "tvg-cpu", "tvg-jpg", "tvg-lottie-expressions", "tvg-otf", "tvg-png", "tvg-ttf", "tvg-webp"] }
 ratatui = { version = "0.30.0", default-features = false, features = ["crossterm"] }
 serde_json = "1.0.149"
 ureq = { version = "3.2.0", default-features = false, features = ["rustls"] }

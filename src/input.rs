@@ -1,12 +1,13 @@
 use anyhow::{Context, Result, anyhow, bail};
 use dotlottie_rs::{DotLottieManager, Manifest};
 use serde_json::Value;
-use std::{fs, io::Read, path::Path};
+use std::{fs, io::Read, path::Path, sync::Arc};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnimationInfo {
     pub id: String,
     pub name: Option<String>,
+    pub initial_theme_id: Option<String>,
     pub width: Option<u64>,
     pub height: Option<u64>,
     pub fps: Option<f64>,
@@ -22,9 +23,12 @@ pub struct ThemeInfo {
 #[derive(Clone, Debug, PartialEq)]
 pub enum LoadedInput {
     Json {
+        data: Arc<[u8]>,
         animation: AnimationInfo,
     },
     DotLottie {
+        data: Arc<[u8]>,
+        default_animation_id: String,
         animations: Vec<AnimationInfo>,
         themes: Vec<ThemeInfo>,
     },
@@ -76,8 +80,11 @@ impl LoadedInput {
 
     fn json(data: &[u8]) -> Result<Self> {
         let value: Value = serde_json::from_slice(data).context("invalid Lottie JSON")?;
-        let animation = animation_from_json("animation", None, &value)?;
-        Ok(Self::Json { animation })
+        let animation = animation_from_json("animation", None, None, &value)?;
+        Ok(Self::Json {
+            data: Arc::from(data),
+            animation,
+        })
     }
 
     fn dotlottie(data: &[u8]) -> Result<Self> {
@@ -87,6 +94,7 @@ impl LoadedInput {
             .map_err(|error| anyhow!("invalid dotLottie container: {error:?}"))?;
         let manifest = manager.manifest();
         let animations = animations_from_manifest(&manager, manifest)?;
+        let default_animation_id = manager.active_animation_id();
         let themes = manifest
             .themes
             .as_deref()
@@ -98,7 +106,12 @@ impl LoadedInput {
             })
             .collect();
 
-        Ok(Self::DotLottie { animations, themes })
+        Ok(Self::DotLottie {
+            data: Arc::from(data),
+            default_animation_id,
+            animations,
+            themes,
+        })
     }
 
     pub fn selected_animation(&self, index: usize) -> &AnimationInfo {
@@ -106,6 +119,45 @@ impl LoadedInput {
             Self::Json { animation, .. } => animation,
             Self::DotLottie { animations, .. } => &animations[index.min(animations.len() - 1)],
         }
+    }
+
+    pub fn data(&self) -> &[u8] {
+        match self {
+            Self::Json { data, .. } | Self::DotLottie { data, .. } => data,
+        }
+    }
+
+    pub fn animation_id(&self, index: usize) -> Option<&str> {
+        match self {
+            Self::Json { .. } => None,
+            Self::DotLottie { animations, .. } => animations
+                .get(index.min(animations.len() - 1))
+                .map(|animation| animation.id.as_str()),
+        }
+    }
+
+    pub fn default_animation_index(&self) -> usize {
+        match self {
+            Self::Json { .. } => 0,
+            Self::DotLottie {
+                default_animation_id,
+                animations,
+                ..
+            } => animations
+                .iter()
+                .position(|animation| animation.id == *default_animation_id)
+                .unwrap_or(0),
+        }
+    }
+
+    pub fn initial_theme_index(&self, animation_index: usize) -> Option<usize> {
+        let initial_theme_id = self
+            .selected_animation(animation_index)
+            .initial_theme_id
+            .as_deref()?;
+        self.themes()
+            .iter()
+            .position(|theme| theme.id == initial_theme_id)
     }
 
     pub fn is_dotlottie(&self) -> bool {
@@ -144,12 +196,22 @@ fn animations_from_manifest(
                 .map_err(|error| anyhow!("animation `{}` is invalid: {error:?}", entry.id))?;
             let value: Value = serde_json::from_str(&document)
                 .with_context(|| format!("animation `{}` is not valid Lottie JSON", entry.id))?;
-            animation_from_json(&entry.id, entry.name.clone(), &value)
+            animation_from_json(
+                &entry.id,
+                entry.name.clone(),
+                entry.initial_theme.clone(),
+                &value,
+            )
         })
         .collect()
 }
 
-fn animation_from_json(id: &str, name: Option<String>, value: &Value) -> Result<AnimationInfo> {
+fn animation_from_json(
+    id: &str,
+    name: Option<String>,
+    initial_theme_id: Option<String>,
+    value: &Value,
+) -> Result<AnimationInfo> {
     let object = value
         .as_object()
         .ok_or_else(|| anyhow!("Lottie animation must be a JSON object"))?;
@@ -168,6 +230,7 @@ fn animation_from_json(id: &str, name: Option<String>, value: &Value) -> Result<
     Ok(AnimationInfo {
         id: id.to_owned(),
         name,
+        initial_theme_id,
         width,
         height,
         fps,
