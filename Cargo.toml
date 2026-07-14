@@ -8,9 +8,9 @@ license = "MIT"
 [dependencies]
 anyhow = "1.0.100"
 base64 = "0.22.1"
-clap = { version = "4.5.60", features = ["derive"] }
+clap = { version = "4.5.60", default-features = false, features = ["derive", "error-context", "help", "std", "usage"] }
 crossterm = "0.29.0"
-dotlottie-rs = { path = "deps/dotlottie-rs/dotlottie-rs", default-features = false, features = ["dotlottie", "theming", "tvg", "tvg-cpu", "tvg-jpg", "tvg-lottie-expressions", "tvg-otf", "tvg-png", "tvg-ttf", "tvg-webp"] }
+dotlottie-rs = { path = "deps/dotlottie-rs/dotlottie-rs", default-features = false, features = ["theming", "tvg-cpu", "tvg-jpg", "tvg-lottie-expressions", "tvg-otf", "tvg-png", "tvg-ttf", "tvg-webp"] }
 ratatui = { version = "0.30.0", default-features = false, features = ["crossterm"] }
 serde_json = "1.0.149"
 ureq = { version = "3.2.0", default-features = false, features = ["rustls"] }
@@ -18,3 +18,9 @@ ureq = { version = "3.2.0", default-features = false, features = ["rustls"] }
 [dev-dependencies]
 assert_cmd = "2.1.1"
 predicates = "3.1.3"
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
+panic = "abort"
+strip = "symbols"

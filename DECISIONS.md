@@ -39,3 +39,11 @@ for every renderer tick can queue faster than the terminal displays it, making a
 slow. `lot` advances dotlottie-rs no more than 30 times per second using the elapsed wall-clock
 time, then sends the latest changed frame. This avoids unnecessary ThorVG work and drops
 intermediate frames rather than extending the animation timeline.
+
+## 2026-07-14 — Optimize the distributable without dropping renderer support
+
+The release profile uses fat LTO, one codegen unit, aborting panics, and stripped symbols. The
+dotlottie-rs feature list keeps themes, CPU ThorVG, image decoders, font loaders, and expressions;
+each maps to a supported input capability. `theming` already enables `dotlottie`, and `tvg-cpu`
+already enables `tvg`, so those redundant direct feature entries are omitted. Clap keeps parsing,
+help, usage, derive, and error-context support but omits color and command-suggestion machinery.
