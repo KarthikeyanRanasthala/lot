@@ -83,6 +83,28 @@ with a compatible Kitty-graphics implementation that `lot` currently recognizes:
 Frames are capped at 30 fps while the animation timeline follows wall-clock time. Other terminals
 remain usable as metadata viewers and show a renderer-unavailable state.
 
+### In action
+
+<p align="center">
+  <img src="docs/images/terminals/wezterm.png" alt="lot previewing an emoji animation in WezTerm" width="900">
+</p>
+<p align="center"><em>WezTerm</em></p>
+
+<p align="center">
+  <img src="docs/images/terminals/kitty.png" alt="lot previewing an emoji animation in Kitty" width="900">
+</p>
+<p align="center"><em>Kitty</em></p>
+
+<p align="center">
+  <img src="docs/images/terminals/ghostty.png" alt="lot previewing an emoji animation in Ghostty" width="900">
+</p>
+<p align="center"><em>Ghostty</em></p>
+
+<p align="center">
+  <img src="docs/images/terminals/warp.png" alt="lot previewing an emoji animation in Warp" width="900">
+</p>
+<p align="center"><em>Warp</em></p>
+
 ## Develop and release
 
 Run the checks before contributing:
