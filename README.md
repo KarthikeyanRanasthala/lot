@@ -1,7 +1,7 @@
 # lot
 
-Preview Lottie JSON and dotLottie animations in Kitty-graphics-compatible terminals, or render
-them as raw RGBA frames for tools such as `ffmpeg`.
+`lot` is `cat`, but for Lottie: preview Lottie JSON and dotLottie animations in
+Kitty-graphics-compatible terminals, or render them as raw RGBA frames for tools such as `ffmpeg`.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
 
@@ -15,18 +15,9 @@ Install `lot` from the published tap:
 brew install KarthikeyanRanasthala/tap/lot
 ```
 
-Homebrew builds `lot` from its released source archive on your machine.
-
-### Build from source
-
-The pinned `dotlottie-rs` release and its ThorVG submodule are fetched shallowly into the ignored
-`deps/` directory before building.
-
-```sh
-mise install
-mise run fetch-dotlottie
-cargo run -- animation.lottie
-```
+Homebrew downloads a prebuilt bottle on supported platforms. Where no matching
+bottle is available, it builds `lot` from its released source archive on your
+machine.
 
 ## Preview an animation
 
@@ -35,11 +26,36 @@ Pass a local `.lottie` file, a Lottie JSON file, or an `http(s)` URL:
 ```sh
 lot animation.lottie
 lot animation.json
-lot https://example.com/animation.lottie
+lot https://lottie.host/294b684d-d6b4-4116-ab35-85ef566d4379/VkGHcqcMUI.lottie
 ```
 
 For dotLottie files, use the arrow keys or mouse wheel to choose an animation or theme. URL
 downloads report progress in the terminal.
+
+### In action
+
+<table>
+  <tr>
+    <td width="50%" align="center">
+      <img src="docs/images/terminals/kitty.png" alt="lot previewing an emoji animation in Kitty" width="100%"><br>
+      <sub>Kitty</sub>
+    </td>
+    <td width="50%" align="center">
+      <img src="docs/images/terminals/ghostty.png" alt="lot previewing an emoji animation in Ghostty" width="100%"><br>
+      <sub>Ghostty</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center">
+      <img src="docs/images/terminals/warp.png" alt="lot previewing an emoji animation in Warp" width="100%"><br>
+      <sub>Warp</sub>
+    </td>
+    <td width="50%" align="center">
+      <img src="docs/images/terminals/wezterm.png" alt="lot previewing an emoji animation in WezTerm" width="100%"><br>
+      <sub>WezTerm</sub>
+    </td>
+  </tr>
+</table>
 
 ## Create an MP4
 
@@ -47,7 +63,8 @@ downloads report progress in the terminal.
 the output to `ffmpeg`:
 
 ```sh
-lot animation.lottie --headless --width 512 --height 512 --fps 30 \
+lot https://lottiefiles.github.io/dotlottie-web/lottie/threads.json \
+  --headless --width 512 --height 512 --fps 30 \
   | ffmpeg -y -f rawvideo -pixel_format rgba -video_size 512x512 -framerate 30 -i - \
       -c:v libx264 -pix_fmt yuv420p output.mp4
 ```
@@ -82,6 +99,17 @@ with a compatible Kitty-graphics implementation that `lot` currently recognizes:
 
 Frames are capped at 30 fps while the animation timeline follows wall-clock time. Other terminals
 remain usable as metadata viewers and show a renderer-unavailable state.
+
+## Build from source
+
+The pinned `dotlottie-rs` release and its ThorVG submodule are fetched shallowly into the ignored
+`deps/` directory before building.
+
+```sh
+mise install
+mise run fetch-dotlottie
+cargo run -- animation.lottie
+```
 
 ## Develop and release
 
