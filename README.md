@@ -34,28 +34,17 @@ downloads report progress in the terminal.
 
 ### In action
 
-<table>
-  <tr>
-    <td width="50%" align="center">
-      <img src="docs/images/terminals/kitty.png" alt="lot previewing an emoji animation in Kitty" width="100%"><br>
-      <sub>Kitty</sub>
-    </td>
-    <td width="50%" align="center">
-      <img src="docs/images/terminals/ghostty.png" alt="lot previewing an emoji animation in Ghostty" width="100%"><br>
-      <sub>Ghostty</sub>
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" align="center">
-      <img src="docs/images/terminals/warp.png" alt="lot previewing an emoji animation in Warp" width="100%"><br>
-      <sub>Warp</sub>
-    </td>
-    <td width="50%" align="center">
-      <img src="docs/images/terminals/wezterm.png" alt="lot previewing an emoji animation in WezTerm" width="100%"><br>
-      <sub>WezTerm</sub>
-    </td>
-  </tr>
-</table>
+<video src="https://github.com/KarthikeyanRanasthala/lot-cli-launch-video/releases/download/v1.0.0/lot-cli-launch-video.mp4" controls muted loop>
+  lot preview demonstration
+</video>
+
+## Controls
+
+- Up / Down or mouse wheel — change the focused animation or theme
+- Tab — switch between animations and themes
+- Space — pause or resume playback
+- Left / Right — pause and step backward or forward one frame
+- q, Esc, or Ctrl-C — exit
 
 ## Create an MP4
 
@@ -78,14 +67,6 @@ For dotLottie inputs, `--animation-id` selects a manifest animation and `--theme
 manifest theme. Without either flag, the file's default animation and initial theme are used.
 The renderer stops after one animation pass; use the output tool to loop or otherwise package the
 video. `--animation-id` and `--theme` are rejected for standalone Lottie JSON inputs.
-
-## Controls
-
-- Up / Down or mouse wheel — change the focused animation or theme
-- Tab — switch between animations and themes
-- Space — pause or resume playback
-- Left / Right — pause and step backward or forward one frame
-- q, Esc, or Ctrl-C — exit
 
 ## Terminal preview support
 
