@@ -56,7 +56,7 @@ initial theme.
 - The preview shows the active terminal renderer, the animation, and centered canvas dimensions,
   duration, and frame rate along the bottom border.
 - Empty theme state: `No themes available`, centered in its panel.
-- Use `#019d91` as the primary color with white text on a dark theme.
+- Use `#006a5f` as the primary color with white text on a dark theme.
 - Use concise copy for loading, error, and unsupported-renderer states.
 
 ## Terminal graphics policy

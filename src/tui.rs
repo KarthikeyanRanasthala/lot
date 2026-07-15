@@ -4,7 +4,8 @@ use crate::terminal::kitty::PreviewArea;
 use anyhow::Result;
 use crossterm::{
     event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseEventKind,
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+        KeyModifiers, MouseEventKind,
     },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -15,14 +16,14 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::Line,
-    widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Gauge, List, ListItem, ListState, Paragraph, Wrap},
 };
 use std::{
     io,
     time::{Duration, Instant},
 };
 
-const PRIMARY: Color = Color::Rgb(1, 157, 145);
+const PRIMARY: Color = Color::Rgb(0, 106, 95);
 // Until terminal pixel metrics are queried, these values keep the render target and Kitty cell
 // placement in one consistent, conservative coordinate system.
 const ESTIMATED_CELL_WIDTH_PX: u32 = 12;
@@ -99,14 +100,24 @@ fn run_loop(
                 }
             }
 
-            terminal
-                .draw(|frame| draw(frame, &app, playback.is_some(), playback_error.as_deref()))?;
+            let progress = playback.as_ref().and_then(KittyPlayback::progress);
+            let is_playing = playback.as_ref().map(KittyPlayback::is_playing);
+            terminal.draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    playback.is_some(),
+                    is_playing,
+                    progress,
+                    playback_error.as_deref(),
+                )
+            })?;
             if let Some(playback) = playback.as_mut() {
                 if needs_present {
                     playback.present(terminal.backend_mut())?;
                     needs_present = false;
                     last_tick = Instant::now();
-                } else {
+                } else if playback.is_playing() {
                     let now = Instant::now();
                     let elapsed = now.saturating_duration_since(last_tick);
                     if elapsed >= PRESENT_INTERVAL {
@@ -125,13 +136,33 @@ fn run_loop(
                 continue;
             }
             match event::read()? {
-                Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
-                    KeyCode::Esc => return Ok(()),
-                    KeyCode::Down => app.next(),
-                    KeyCode::Up => app.previous(),
-                    KeyCode::Tab => app.toggle_focus(),
-                    _ => {}
-                },
+                Event::Key(key) if key.kind == KeyEventKind::Press => {
+                    if is_quit_key(key) {
+                        return Ok(());
+                    }
+
+                    match key.code {
+                        KeyCode::Down => app.next(),
+                        KeyCode::Up => app.previous(),
+                        KeyCode::Tab => app.toggle_focus(),
+                        KeyCode::Char(' ') => {
+                            if let Some(playback) = playback.as_mut() {
+                                playback.toggle_pause()?;
+                                last_tick = Instant::now();
+                            }
+                        }
+                        KeyCode::Left | KeyCode::Right => {
+                            if let Some(playback) = playback.as_mut() {
+                                let offset = if key.code == KeyCode::Left { -1 } else { 1 };
+                                if playback.step_frame(offset)? {
+                                    playback.present(terminal.backend_mut())?;
+                                }
+                                last_tick = Instant::now();
+                            }
+                        }
+                        _ => {}
+                    }
+                }
                 Event::Mouse(mouse) => match mouse.kind {
                     MouseEventKind::ScrollDown => app.next(),
                     MouseEventKind::ScrollUp => app.previous(),
@@ -146,6 +177,11 @@ fn run_loop(
         let _ = playback.clear(terminal.backend_mut());
     }
     result
+}
+
+fn is_quit_key(key: KeyEvent) -> bool {
+    matches!(key.code, KeyCode::Esc | KeyCode::Char('q' | 'Q'))
+        || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
 }
 
 #[derive(Clone, Copy)]
@@ -229,14 +265,21 @@ impl App {
     }
 }
 
-fn draw(frame: &mut Frame, app: &App, is_rendering: bool, playback_error: Option<&str>) {
+fn draw(
+    frame: &mut Frame,
+    app: &App,
+    is_rendering: bool,
+    is_playing: Option<bool>,
+    progress: Option<f64>,
+    playback_error: Option<&str>,
+) {
     let outer = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(PRIMARY))
         .title(" lot ");
-    let area = outer.inner(frame.area());
     frame.render_widget(outer, frame.area());
+    let (area, footer) = app_layout(frame.area());
 
     if app.input.is_dotlottie() {
         let columns = Layout::default()
@@ -244,10 +287,33 @@ fn draw(frame: &mut Frame, app: &App, is_rendering: bool, playback_error: Option
             .constraints([Constraint::Length(30), Constraint::Min(28)])
             .split(area);
         draw_sidebar(frame, columns[0], app);
-        draw_preview(frame, columns[1], app, is_rendering, playback_error);
+        draw_preview(
+            frame,
+            columns[1],
+            app,
+            is_rendering,
+            is_playing,
+            progress,
+            playback_error,
+        );
     } else {
-        draw_preview(frame, area, app, is_rendering, playback_error);
+        draw_preview(
+            frame,
+            area,
+            app,
+            is_rendering,
+            is_playing,
+            progress,
+            playback_error,
+        );
     }
+
+    frame.render_widget(
+        Paragraph::new(controls_text(&app.input, is_playing))
+            .style(Style::default().fg(Color::DarkGray))
+            .alignment(Alignment::Left),
+        footer,
+    );
 }
 
 fn draw_sidebar(frame: &mut Frame, area: Rect, app: &App) {
@@ -329,20 +395,23 @@ fn draw_preview(
     area: Rect,
     app: &App,
     is_rendering: bool,
+    is_playing: Option<bool>,
+    progress: Option<f64>,
     playback_error: Option<&str>,
 ) {
     let animation = app.input.selected_animation(app.animation_index);
-    let title = if is_rendering {
-        " Preview · Kitty graphics "
-    } else {
-        " Preview · renderer unavailable "
-    };
-    let block = panel(title, true).title_bottom(
+    let block = panel(" Preview ", true).title_bottom(
         Line::from(metadata_values(animation))
             .centered()
             .style(Style::default().fg(Color::Gray)),
     );
     let content = block.inner(area);
+    let progress_area = Rect::new(
+        content.x,
+        content.y + content.height.saturating_sub(1),
+        content.width,
+        content.height.min(1),
+    );
     let message_height = content.height.min(4);
     let message_area = Rect::new(
         content.x,
@@ -351,6 +420,22 @@ fn draw_preview(
         message_height,
     );
     frame.render_widget(block, area);
+    if let Some(progress) = progress {
+        let label = playback_progress_label(
+            progress,
+            animation.duration_seconds,
+            is_playing.unwrap_or(true),
+        );
+        frame.render_widget(
+            Gauge::default()
+                .ratio(progress)
+                .label(label)
+                .use_unicode(true)
+                .style(Style::default().fg(Color::DarkGray))
+                .gauge_style(Style::default().fg(PRIMARY)),
+            progress_area,
+        );
+    }
     if !is_rendering {
         let detail = playback_error
             .unwrap_or("This terminal does not expose a supported graphics protocol.");
@@ -402,18 +487,71 @@ fn metadata_values(animation: &AnimationInfo) -> String {
     format!(" {canvas}  ·  {duration}  ·  {fps} ")
 }
 
+fn playback_progress_label(
+    progress: f64,
+    duration_seconds: Option<f64>,
+    is_playing: bool,
+) -> String {
+    let state = (!is_playing).then_some("Paused · ");
+    let Some(duration) =
+        duration_seconds.filter(|duration| duration.is_finite() && *duration > 0.0)
+    else {
+        return state.unwrap_or_default().to_owned();
+    };
+    let elapsed = duration * progress;
+    format!(
+        "{}{} / {}",
+        state.unwrap_or_default(),
+        format_playback_time(elapsed),
+        format_playback_time(duration),
+    )
+}
+
+fn format_playback_time(seconds: f64) -> String {
+    if seconds < 60.0 {
+        return format!("{seconds:.1}s");
+    }
+
+    let whole_seconds = seconds.floor() as u64;
+    format!("{}:{:02}", whole_seconds / 60, whole_seconds % 60)
+}
+
 fn count_label(count: usize, singular: &str) -> String {
     let suffix = if count == 1 { "" } else { "s" };
     format!("{count} {singular}{suffix}")
 }
 
-fn preview_area(area: Rect, input: &LoadedInput) -> Rect {
+fn controls_text(input: &LoadedInput, is_playing: Option<bool>) -> &'static str {
+    match (input.is_dotlottie(), is_playing) {
+        (false, Some(true)) => "←/→ Step  ·  Space Pause  ·  q/Esc Quit",
+        (false, Some(false)) => "←/→ Step  ·  Space Play  ·  q/Esc Quit",
+        (false, None) => "q / Esc Quit",
+        (true, Some(true)) => {
+            "↑/↓ Select  ·  Tab Switch  ·  ←/→ Step  ·  Space Pause  ·  q/Esc Quit"
+        }
+        (true, Some(false)) => {
+            "↑/↓ Select  ·  Tab Switch  ·  ←/→ Step  ·  Space Play  ·  q/Esc Quit"
+        }
+        (true, None) => "↑/↓ Select  ·  Tab Switch  ·  q/Esc Quit",
+    }
+}
+
+fn app_layout(area: Rect) -> (Rect, Rect) {
     let inner = Rect::new(
         area.x.saturating_add(1),
         area.y.saturating_add(1),
         area.width.saturating_sub(2),
         area.height.saturating_sub(2),
     );
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .split(inner);
+    (sections[0], sections[1])
+}
+
+fn preview_area(area: Rect, input: &LoadedInput) -> Rect {
+    let (inner, _) = app_layout(area);
     if input.is_dotlottie() {
         Layout::default()
             .direction(Direction::Horizontal)
@@ -429,7 +567,7 @@ fn preview_content_area(area: Rect) -> Rect {
         area.x.saturating_add(1),
         area.y.saturating_add(1),
         area.width.saturating_sub(2),
-        area.height.saturating_sub(2),
+        area.height.saturating_sub(3),
     )
 }
 
@@ -480,8 +618,54 @@ fn target_dimensions(input: &LoadedInput, animation_index: usize, area: Rect) ->
 
 #[cfg(test)]
 mod tests {
-    use super::preview_target;
+    use super::{
+        format_playback_time, is_quit_key, playback_progress_label, preview_content_area,
+        preview_target,
+    };
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::layout::Rect;
+
+    #[test]
+    fn recognises_the_documented_quit_keys() {
+        assert!(is_quit_key(KeyEvent::new(
+            KeyCode::Char('q'),
+            KeyModifiers::NONE,
+        )));
+        assert!(is_quit_key(KeyEvent::new(
+            KeyCode::Char('Q'),
+            KeyModifiers::SHIFT,
+        )));
+        assert!(is_quit_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        assert!(is_quit_key(KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(!is_quit_key(KeyEvent::new(
+            KeyCode::Char('x'),
+            KeyModifiers::NONE,
+        )));
+    }
+
+    #[test]
+    fn preview_content_leaves_a_row_for_playback_progress() {
+        assert_eq!(
+            preview_content_area(Rect::new(10, 5, 80, 30)),
+            Rect::new(11, 6, 78, 27),
+        );
+    }
+
+    #[test]
+    fn progress_label_shows_elapsed_time_and_pause_state() {
+        assert_eq!(
+            playback_progress_label(0.5, Some(2.43), true),
+            "1.2s / 2.4s",
+        );
+        assert_eq!(
+            playback_progress_label(0.5, Some(2.43), false),
+            "Paused · 1.2s / 2.4s",
+        );
+        assert_eq!(format_playback_time(65.7), "1:05");
+    }
 
     #[test]
     fn placement_is_centered_and_matches_the_rendered_pixel_size() {
