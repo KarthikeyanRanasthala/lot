@@ -34,9 +34,11 @@ downloads report progress in the terminal.
 
 ### In action
 
-<video src="https://github.com/KarthikeyanRanasthala/lot-cli-launch-video/releases/download/v1.0.0/lot-cli-launch-video.mp4" controls muted loop>
-  lot preview demonstration
-</video>
+
+
+https://github.com/user-attachments/assets/5bf14b6c-6c24-48a1-a087-fa6cd39103fd
+
+
 
 ## Controls
 
