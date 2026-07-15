@@ -83,7 +83,7 @@ video. `--animation-id` and `--theme` are rejected for standalone Lottie JSON in
 
 - Up / Down or mouse wheel — change the focused animation or theme
 - Tab — switch between animations and themes
-- Esc — exit
+- q, Esc, or Ctrl-C — exit
 
 ## Terminal preview support
 

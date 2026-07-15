@@ -4,7 +4,8 @@ use crate::terminal::kitty::PreviewArea;
 use anyhow::Result;
 use crossterm::{
     event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseEventKind,
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+        KeyModifiers, MouseEventKind,
     },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -125,13 +126,18 @@ fn run_loop(
                 continue;
             }
             match event::read()? {
-                Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
-                    KeyCode::Esc => return Ok(()),
-                    KeyCode::Down => app.next(),
-                    KeyCode::Up => app.previous(),
-                    KeyCode::Tab => app.toggle_focus(),
-                    _ => {}
-                },
+                Event::Key(key) if key.kind == KeyEventKind::Press => {
+                    if is_quit_key(key) {
+                        return Ok(());
+                    }
+
+                    match key.code {
+                        KeyCode::Down => app.next(),
+                        KeyCode::Up => app.previous(),
+                        KeyCode::Tab => app.toggle_focus(),
+                        _ => {}
+                    }
+                }
                 Event::Mouse(mouse) => match mouse.kind {
                     MouseEventKind::ScrollDown => app.next(),
                     MouseEventKind::ScrollUp => app.previous(),
@@ -146,6 +152,11 @@ fn run_loop(
         let _ = playback.clear(terminal.backend_mut());
     }
     result
+}
+
+fn is_quit_key(key: KeyEvent) -> bool {
+    matches!(key.code, KeyCode::Esc | KeyCode::Char('q' | 'Q'))
+        || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
 }
 
 #[derive(Clone, Copy)]
@@ -235,8 +246,8 @@ fn draw(frame: &mut Frame, app: &App, is_rendering: bool, playback_error: Option
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(PRIMARY))
         .title(" lot ");
-    let area = outer.inner(frame.area());
     frame.render_widget(outer, frame.area());
+    let (area, footer) = app_layout(frame.area());
 
     if app.input.is_dotlottie() {
         let columns = Layout::default()
@@ -248,6 +259,13 @@ fn draw(frame: &mut Frame, app: &App, is_rendering: bool, playback_error: Option
     } else {
         draw_preview(frame, area, app, is_rendering, playback_error);
     }
+
+    frame.render_widget(
+        Paragraph::new(controls_text(&app.input))
+            .style(Style::default().fg(Color::DarkGray))
+            .alignment(Alignment::Left),
+        footer,
+    );
 }
 
 fn draw_sidebar(frame: &mut Frame, area: Rect, app: &App) {
@@ -332,12 +350,7 @@ fn draw_preview(
     playback_error: Option<&str>,
 ) {
     let animation = app.input.selected_animation(app.animation_index);
-    let title = if is_rendering {
-        " Preview · Kitty graphics "
-    } else {
-        " Preview · renderer unavailable "
-    };
-    let block = panel(title, true).title_bottom(
+    let block = panel(" Preview ", true).title_bottom(
         Line::from(metadata_values(animation))
             .centered()
             .style(Style::default().fg(Color::Gray)),
@@ -407,13 +420,30 @@ fn count_label(count: usize, singular: &str) -> String {
     format!("{count} {singular}{suffix}")
 }
 
-fn preview_area(area: Rect, input: &LoadedInput) -> Rect {
+fn controls_text(input: &LoadedInput) -> &'static str {
+    if !input.is_dotlottie() {
+        return "q / Esc Quit";
+    }
+
+    "↑/↓ Choose  ·  Tab Switch panel  ·  q / Esc Quit"
+}
+
+fn app_layout(area: Rect) -> (Rect, Rect) {
     let inner = Rect::new(
         area.x.saturating_add(1),
         area.y.saturating_add(1),
         area.width.saturating_sub(2),
         area.height.saturating_sub(2),
     );
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .split(inner);
+    (sections[0], sections[1])
+}
+
+fn preview_area(area: Rect, input: &LoadedInput) -> Rect {
+    let (inner, _) = app_layout(area);
     if input.is_dotlottie() {
         Layout::default()
             .direction(Direction::Horizontal)
@@ -480,8 +510,30 @@ fn target_dimensions(input: &LoadedInput, animation_index: usize, area: Rect) ->
 
 #[cfg(test)]
 mod tests {
-    use super::preview_target;
+    use super::{is_quit_key, preview_target};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::layout::Rect;
+
+    #[test]
+    fn recognises_the_documented_quit_keys() {
+        assert!(is_quit_key(KeyEvent::new(
+            KeyCode::Char('q'),
+            KeyModifiers::NONE,
+        )));
+        assert!(is_quit_key(KeyEvent::new(
+            KeyCode::Char('Q'),
+            KeyModifiers::SHIFT,
+        )));
+        assert!(is_quit_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        assert!(is_quit_key(KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(!is_quit_key(KeyEvent::new(
+            KeyCode::Char('x'),
+            KeyModifiers::NONE,
+        )));
+    }
 
     #[test]
     fn placement_is_centered_and_matches_the_rendered_pixel_size() {
