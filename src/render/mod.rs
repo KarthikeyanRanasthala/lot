@@ -109,6 +109,36 @@ impl AnimationRenderer {
         Ok(self.player.is_playing())
     }
 
+    pub fn step_frame(&mut self, offset: i8) -> Result<bool> {
+        if offset == 0 {
+            return Ok(false);
+        }
+        if self.player.is_playing() {
+            self.player
+                .pause()
+                .map_err(|error| anyhow!("could not pause animation: {error:?}"))?;
+        }
+
+        let segment = self
+            .player
+            .segment()
+            .map_err(|error| anyhow!("could not read animation frame range: {error:?}"))?;
+        let current_frame = self.player.current_frame();
+        let target_frame = (current_frame + f32::from(offset)).clamp(segment.start, segment.end);
+        if target_frame == current_frame {
+            return Ok(false);
+        }
+
+        self.player
+            .set_frame(target_frame)
+            .map_err(|error| anyhow!("could not seek animation frame: {error:?}"))?;
+        self.player
+            .render()
+            .map_err(|error| anyhow!("could not render animation frame: {error:?}"))?;
+        self.copy_rgba();
+        Ok(true)
+    }
+
     /// Advances dotlottie-rs using its millisecond clock and returns whether a frame changed.
     pub fn advance(&mut self, elapsed: Duration) -> Result<bool> {
         let changed = self
@@ -228,6 +258,10 @@ impl KittyPlayback {
         self.animation.toggle_pause()
     }
 
+    pub fn step_frame(&mut self, offset: i8) -> Result<bool> {
+        self.animation.step_frame(offset)
+    }
+
     pub fn clear<W: Write>(&mut self, writer: &mut W) -> Result<()> {
         self.presenter.clear(writer)?;
         Ok(())
@@ -292,6 +326,20 @@ mod tests {
         assert!(renderer.is_playing());
         assert!(!renderer.toggle_pause().unwrap());
         assert!(renderer.toggle_pause().unwrap());
+    }
+
+    #[test]
+    fn stepping_a_frame_pauses_and_renders_the_selected_frame() {
+        let input = LoadedInput::from_bytes(
+            br#"{"v":"5.5.2","fr":30,"ip":0,"op":30,"w":16,"h":16,"layers":[]}"#,
+        )
+        .unwrap();
+        let mut renderer = AnimationRenderer::new(&input, 0, None, 8, 8).unwrap();
+
+        assert!(!renderer.step_frame(-1).unwrap());
+        assert!(!renderer.is_playing());
+        assert!(renderer.step_frame(1).unwrap());
+        assert!(renderer.progress().unwrap() > 0.0);
     }
 
     #[test]

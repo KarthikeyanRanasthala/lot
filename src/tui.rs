@@ -151,6 +151,15 @@ fn run_loop(
                                 last_tick = Instant::now();
                             }
                         }
+                        KeyCode::Left | KeyCode::Right => {
+                            if let Some(playback) = playback.as_mut() {
+                                let offset = if key.code == KeyCode::Left { -1 } else { 1 };
+                                if playback.step_frame(offset)? {
+                                    playback.present(terminal.backend_mut())?;
+                                }
+                                last_tick = Instant::now();
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -514,12 +523,16 @@ fn count_label(count: usize, singular: &str) -> String {
 
 fn controls_text(input: &LoadedInput, is_playing: Option<bool>) -> &'static str {
     match (input.is_dotlottie(), is_playing) {
-        (false, Some(true)) => "Space Pause  ·  q / Esc Quit",
-        (false, Some(false)) => "Space Play  ·  q / Esc Quit",
+        (false, Some(true)) => "←/→ Step  ·  Space Pause  ·  q/Esc Quit",
+        (false, Some(false)) => "←/→ Step  ·  Space Play  ·  q/Esc Quit",
         (false, None) => "q / Esc Quit",
-        (true, Some(true)) => "↑/↓ Choose  ·  Tab Switch panel  ·  Space Pause  ·  q / Esc Quit",
-        (true, Some(false)) => "↑/↓ Choose  ·  Tab Switch panel  ·  Space Play  ·  q / Esc Quit",
-        (true, None) => "↑/↓ Choose  ·  Tab Switch panel  ·  q / Esc Quit",
+        (true, Some(true)) => {
+            "↑/↓ Select  ·  Tab Switch  ·  ←/→ Step  ·  Space Pause  ·  q/Esc Quit"
+        }
+        (true, Some(false)) => {
+            "↑/↓ Select  ·  Tab Switch  ·  ←/→ Step  ·  Space Play  ·  q/Esc Quit"
+        }
+        (true, None) => "↑/↓ Select  ·  Tab Switch  ·  q/Esc Quit",
     }
 }
 

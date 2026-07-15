@@ -84,6 +84,7 @@ video. `--animation-id` and `--theme` are rejected for standalone Lottie JSON in
 - Up / Down or mouse wheel — change the focused animation or theme
 - Tab — switch between animations and themes
 - Space — pause or resume playback
+- Left / Right — pause and step backward or forward one frame
 - q, Esc, or Ctrl-C — exit
 
 ## Terminal preview support
