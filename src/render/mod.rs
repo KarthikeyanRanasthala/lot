@@ -88,6 +88,27 @@ impl AnimationRenderer {
         (&self.rgba_buffer, self.width, self.height)
     }
 
+    pub fn progress(&self) -> Option<f64> {
+        playback_progress(self.player.current_frame(), self.player.total_frames())
+    }
+
+    pub fn is_playing(&self) -> bool {
+        self.player.is_playing()
+    }
+
+    pub fn toggle_pause(&mut self) -> Result<bool> {
+        if self.player.is_playing() {
+            self.player
+                .pause()
+                .map_err(|error| anyhow!("could not pause animation: {error:?}"))?;
+        } else {
+            self.player
+                .play()
+                .map_err(|error| anyhow!("could not resume animation: {error:?}"))?;
+        }
+        Ok(self.player.is_playing())
+    }
+
     /// Advances dotlottie-rs using its millisecond clock and returns whether a frame changed.
     pub fn advance(&mut self, elapsed: Duration) -> Result<bool> {
         let changed = self
@@ -115,6 +136,14 @@ impl AnimationRenderer {
             rgba.copy_from_slice(&pixel.to_le_bytes());
         }
     }
+}
+
+fn playback_progress(current_frame: f32, total_frames: f32) -> Option<f64> {
+    if !current_frame.is_finite() || !total_frames.is_finite() || total_frames <= 0.0 {
+        return None;
+    }
+
+    Some((f64::from(current_frame) / f64::from(total_frames)).clamp(0.0, 1.0))
 }
 
 /// A dotLottie playback loop paired with the custom Kitty image presenter.
@@ -187,6 +216,18 @@ impl KittyPlayback {
         self.animation.advance(elapsed)
     }
 
+    pub fn progress(&self) -> Option<f64> {
+        self.animation.progress()
+    }
+
+    pub fn is_playing(&self) -> bool {
+        self.animation.is_playing()
+    }
+
+    pub fn toggle_pause(&mut self) -> Result<bool> {
+        self.animation.toggle_pause()
+    }
+
     pub fn clear<W: Write>(&mut self, writer: &mut W) -> Result<()> {
         self.presenter.clear(writer)?;
         Ok(())
@@ -222,7 +263,7 @@ fn terminal_strategy(
 
 #[cfg(test)]
 mod tests {
-    use super::{AnimationRenderer, BufferingStrategy, terminal_strategy};
+    use super::{AnimationRenderer, BufferingStrategy, playback_progress, terminal_strategy};
     use crate::input::LoadedInput;
     use std::time::Duration;
 
@@ -238,6 +279,19 @@ mod tests {
         assert_eq!((width, height), (8, 8));
         assert_eq!(frame.len(), 8 * 8 * 4);
         renderer.advance(Duration::from_millis(34)).unwrap();
+    }
+
+    #[test]
+    fn toggles_playback_without_resetting_the_animation() {
+        let input = LoadedInput::from_bytes(
+            br#"{"v":"5.5.2","fr":30,"ip":0,"op":30,"w":16,"h":16,"layers":[]}"#,
+        )
+        .unwrap();
+        let mut renderer = AnimationRenderer::new(&input, 0, None, 8, 8).unwrap();
+
+        assert!(renderer.is_playing());
+        assert!(!renderer.toggle_pause().unwrap());
+        assert!(renderer.toggle_pause().unwrap());
     }
 
     #[test]
@@ -259,5 +313,14 @@ mod tests {
             Some(BufferingStrategy::Double)
         );
         assert_eq!(terminal_strategy(Some("screen"), None), None);
+    }
+
+    #[test]
+    fn playback_progress_is_clamped_and_rejects_invalid_totals() {
+        assert_eq!(playback_progress(5.0, 10.0), Some(0.5));
+        assert_eq!(playback_progress(-1.0, 10.0), Some(0.0));
+        assert_eq!(playback_progress(11.0, 10.0), Some(1.0));
+        assert_eq!(playback_progress(1.0, 0.0), None);
+        assert_eq!(playback_progress(1.0, f32::NAN), None);
     }
 }
