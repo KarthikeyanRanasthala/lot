@@ -22,7 +22,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const PRIMARY: Color = Color::Rgb(1, 157, 145);
+const PRIMARY: Color = Color::Rgb(0, 106, 95);
 // Until terminal pixel metrics are queried, these values keep the render target and Kitty cell
 // placement in one consistent, conservative coordinate system.
 const ESTIMATED_CELL_WIDTH_PX: u32 = 12;
