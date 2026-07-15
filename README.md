@@ -5,6 +5,10 @@ Kitty-graphics-compatible terminals, or render them as raw RGBA frames for tools
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
 
+## Launch trailer
+
+https://github.com/user-attachments/assets/5bf14b6c-6c24-48a1-a087-fa6cd39103fd
+
 ## Install
 
 ### Homebrew (macOS and Linux)
@@ -31,14 +35,6 @@ lot https://lottie.host/294b684d-d6b4-4116-ab35-85ef566d4379/VkGHcqcMUI.lottie
 
 For dotLottie files, use the arrow keys or mouse wheel to choose an animation or theme. URL
 downloads report progress in the terminal.
-
-### In action
-
-
-
-https://github.com/user-attachments/assets/5bf14b6c-6c24-48a1-a087-fa6cd39103fd
-
-
 
 ## Controls
 
