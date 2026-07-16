@@ -37,8 +37,9 @@ lot animation.json
 lot https://lottie.host/294b684d-d6b4-4116-ab35-85ef566d4379/VkGHcqcMUI.lottie
 ```
 
-For dotLottie files, use the arrow keys or mouse wheel to choose an animation or theme. URL
-downloads report progress in the terminal.
+For dotLottie files, use the arrow keys or mouse wheel to choose an animation or theme. Mouse
+wheel selection stops at the first and last item; arrow-key selection cycles. URL downloads show a
+progress bar, percentage, and adaptive units such as B, KB, and MB.
 
 ## Controls
 

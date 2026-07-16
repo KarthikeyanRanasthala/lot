@@ -164,8 +164,8 @@ fn run_loop(
                     }
                 }
                 Event::Mouse(mouse) => match mouse.kind {
-                    MouseEventKind::ScrollDown => app.next(),
-                    MouseEventKind::ScrollUp => app.previous(),
+                    MouseEventKind::ScrollDown => app.next_clamped(),
+                    MouseEventKind::ScrollUp => app.previous_clamped(),
                     _ => {}
                 },
                 _ => {}
@@ -243,6 +243,42 @@ impl App {
                     let selected = self.theme_index.map_or(0, |index| index + 1);
                     let previous = (selected + len - 1) % len;
                     self.theme_index = previous.checked_sub(1);
+                }
+            }
+        }
+    }
+
+    fn next_clamped(&mut self) {
+        match self.focus {
+            Focus::Animations => {
+                let last_index = self.input.animations().len().saturating_sub(1);
+                if self.animation_index < last_index {
+                    self.animation_index += 1;
+                    self.theme_index = self.input.initial_theme_index(self.animation_index);
+                }
+            }
+            Focus::Themes => {
+                let last_index = self.input.themes().len();
+                let selected = self.theme_index.map_or(0, |index| index + 1);
+                if selected < last_index {
+                    self.theme_index = Some(selected);
+                }
+            }
+        }
+    }
+
+    fn previous_clamped(&mut self) {
+        match self.focus {
+            Focus::Animations => {
+                if self.animation_index > 0 {
+                    self.animation_index -= 1;
+                    self.theme_index = self.input.initial_theme_index(self.animation_index);
+                }
+            }
+            Focus::Themes => {
+                let selected = self.theme_index.map_or(0, |index| index + 1);
+                if selected > 0 {
+                    self.theme_index = (selected - 1).checked_sub(1);
                 }
             }
         }
@@ -619,11 +655,13 @@ fn target_dimensions(input: &LoadedInput, animation_index: usize, area: Rect) ->
 #[cfg(test)]
 mod tests {
     use super::{
-        format_playback_time, is_quit_key, playback_progress_label, preview_content_area,
-        preview_target,
+        App, Focus, format_playback_time, is_quit_key, playback_progress_label,
+        preview_content_area, preview_target,
     };
+    use crate::input::{AnimationInfo, LoadedInput, ThemeInfo};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::layout::Rect;
+    use std::sync::Arc;
 
     #[test]
     fn recognises_the_documented_quit_keys() {
@@ -675,5 +713,68 @@ mod tests {
         assert_eq!(target.row, 20);
         assert_eq!(target.columns, 43);
         assert_eq!(target.rows, 22);
+    }
+
+    #[test]
+    fn mouse_selection_stops_at_animation_boundaries() {
+        let mut app = App::new(dotlottie_input());
+
+        app.previous_clamped();
+        assert_eq!(app.animation_index, 0);
+
+        app.next_clamped();
+        app.next_clamped();
+        assert_eq!(app.animation_index, 1);
+    }
+
+    #[test]
+    fn mouse_selection_stops_at_theme_boundaries() {
+        let mut app = App::new(dotlottie_input());
+        app.focus = Focus::Themes;
+
+        app.previous_clamped();
+        assert_eq!(app.theme_index, None);
+
+        app.next_clamped();
+        app.next_clamped();
+        app.next_clamped();
+        assert_eq!(app.theme_index, Some(1));
+    }
+
+    fn dotlottie_input() -> LoadedInput {
+        LoadedInput::DotLottie {
+            data: Arc::from([]),
+            default_animation_id: "first".to_owned(),
+            animations: vec![
+                AnimationInfo {
+                    id: "first".to_owned(),
+                    name: None,
+                    initial_theme_id: None,
+                    width: None,
+                    height: None,
+                    fps: None,
+                    duration_seconds: None,
+                },
+                AnimationInfo {
+                    id: "second".to_owned(),
+                    name: None,
+                    initial_theme_id: None,
+                    width: None,
+                    height: None,
+                    fps: None,
+                    duration_seconds: None,
+                },
+            ],
+            themes: vec![
+                ThemeInfo {
+                    id: "light".to_owned(),
+                    name: None,
+                },
+                ThemeInfo {
+                    id: "dark".to_owned(),
+                    name: None,
+                },
+            ],
+        }
     }
 }
