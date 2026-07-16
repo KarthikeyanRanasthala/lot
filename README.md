@@ -7,7 +7,11 @@ Kitty-graphics-compatible terminals, or render them as raw RGBA frames for tools
 
 ## Launch trailer
 
-https://github.com/user-attachments/assets/5bf14b6c-6c24-48a1-a087-fa6cd39103fd
+
+
+https://github.com/user-attachments/assets/984b81ec-18d4-4cc6-a7d0-6579ed346820
+
+
 
 ## Install
 
