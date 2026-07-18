@@ -1,8 +1,9 @@
 //! Directory playlist: discovery, natural sort, search, selection, and watching.
 
-mod discover;
-mod state;
-mod watch;
+pub mod discover;
+pub mod state;
+pub mod watch;
 
-pub use state::Playlist;
-pub use watch::{PlaylistEvent, spawn_directory_watcher};
+pub use discover::{discover_animations, is_animation_path, natural_path_cmp, natural_str_cmp};
+pub use state::{Playlist, PlaylistEntry};
+pub use watch::{PlaylistEvent, WatcherSession, spawn_directory_watcher};

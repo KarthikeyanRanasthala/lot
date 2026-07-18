@@ -1,17 +1,9 @@
-mod app;
-mod cli;
-mod input;
-mod playlist;
-mod render;
-mod tui;
-mod tui_playlist;
-
-pub mod terminal;
-
 use anyhow::Result;
 use clap::Parser;
+use lot::app;
+use lot::cli::Command;
 
 fn main() -> Result<()> {
-    let command = cli::Command::parse();
+    let command = Command::parse();
     app::run(command)
 }
