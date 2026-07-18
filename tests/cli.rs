@@ -1,7 +1,10 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
 use std::fs;
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::path::PathBuf;
+use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn temp_dir(label: &str) -> PathBuf {
@@ -16,6 +19,27 @@ fn temp_dir(label: &str) -> PathBuf {
 
 fn fixture_json() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/two_frames.json")
+}
+
+/// Serve `body` once over HTTP/1.1 on a random localhost port.
+fn serve_once(body: Vec<u8>) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let handle = thread::spawn(move || {
+        let Ok((mut stream, _)) = listener.accept() else {
+            return;
+        };
+        let mut buf = [0_u8; 4096];
+        let _ = stream.read(&mut buf);
+        let header = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        let _ = stream.write_all(header.as_bytes());
+        let _ = stream.write_all(&body);
+        let _ = stream.flush();
+    });
+    (format!("http://{addr}/two_frames.json"), handle)
 }
 
 #[test]
@@ -160,7 +184,6 @@ fn empty_directory_is_rejected_in_headless_mode() {
 
 #[test]
 fn invalid_url_scheme_path_is_treated_as_local() {
-    // A non-http(s) string is classified as a local path and fails when missing.
     Command::cargo_bin("lot")
         .unwrap()
         .arg("not-a-valid-local-file.lottie")
@@ -169,8 +192,7 @@ fn invalid_url_scheme_path_is_treated_as_local() {
 }
 
 #[test]
-fn url_input_is_not_classified_as_local_directory() {
-    // Should attempt a download (and fail without hanging on playlist mode).
+fn dead_url_fails_as_download_not_playlist() {
     Command::cargo_bin("lot")
         .unwrap()
         .args([
@@ -191,4 +213,31 @@ fn url_input_is_not_classified_as_local_directory() {
                 .or(predicate::str::contains("Connection"))
                 .or(predicate::str::contains("error")),
         );
+}
+
+#[test]
+fn successful_url_load_from_local_http_server() {
+    let body = fs::read(fixture_json()).expect("fixture");
+    let expected_len = 5 * 4 * 3 * 4;
+    let (url, server) = serve_once(body);
+
+    Command::cargo_bin("lot")
+        .unwrap()
+        .args([
+            &url,
+            "--headless",
+            "--width",
+            "4",
+            "--height",
+            "3",
+            "--fps",
+            "5",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::function(move |output: &[u8]| {
+            output.len() == expected_len
+        }));
+
+    let _ = server.join();
 }

@@ -1255,6 +1255,7 @@ dependencies = [
  "clap",
  "crossterm",
  "dotlottie-rs",
+ "libc",
  "notify",
  "predicates",
  "ratatui",

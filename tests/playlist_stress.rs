@@ -1,327 +1,33 @@
-//! Adversarial stress test for directory playlist discovery and state.
+//! Five-minute adversarial stress test against **production** playlist + watcher.
 //!
-//! Default `cargo test` ignores this test. Run it explicitly for ~5 minutes:
+//! Uses only:
+//! - [`lot::playlist::Playlist`]
+//! - [`lot::playlist::discover_animations`]
+//! - [`lot::playlist::spawn_directory_watcher`]
+//! - [`lot::playlist::PlaylistEvent`] / generation values
+//! - [`lot::input::LoadedInput`] for corrupt-file isolation
+//!
+//! Playlist updates come **only** from watcher `ScanComplete` events (same path as the TUI).
+//! Ground-truth reconciliation uses production `discover_animations` after quiet periods.
 //!
 //! ```sh
 //! LOT_STRESS_SECS=300 cargo test --test playlist_stress -- --ignored --nocapture
 //! ```
-//!
-//! Optional: `LOT_STRESS_SEED=42` for reproducibility.
 
-use std::collections::{BTreeMap, BTreeSet};
+mod common;
+
+use common::{
+    apply_playlist_event, assert_playlist_invariants, fixture_json_bytes, playlist_path_set,
+    temp_dir, write_corrupt,
+};
+use lot::input::LoadedInput;
+use lot::playlist::{Playlist, discover_animations, spawn_directory_watcher};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-
-const VALID_JSON: &[u8] = include_bytes!("../fixtures/two_frames.json");
-
-#[derive(Clone, Debug)]
-struct Entry {
-    #[allow(dead_code)]
-    path: PathBuf,
-    corrupt: bool,
-}
-
-/// Pure playlist model used by the stress harness (mirrors production invariants).
-struct StressPlaylist {
-    root: PathBuf,
-    entries: BTreeMap<PathBuf, Entry>,
-    order: Vec<PathBuf>,
-    filter: String,
-    selected: Option<PathBuf>,
-}
-
-impl StressPlaylist {
-    fn new(root: PathBuf) -> Self {
-        Self {
-            root,
-            entries: BTreeMap::new(),
-            order: Vec::new(),
-            filter: String::new(),
-            selected: None,
-        }
-    }
-
-    fn apply_rescan(&mut self, paths: Vec<(PathBuf, bool)>) {
-        let previous = self.selected.clone();
-        self.entries.clear();
-        for (path, corrupt) in paths {
-            self.entries.insert(
-                path.clone(),
-                Entry {
-                    path: path.clone(),
-                    corrupt,
-                },
-            );
-        }
-        self.rebuild_order();
-        self.rebind_selection(previous.as_deref());
-    }
-
-    fn set_filter(&mut self, filter: String) {
-        let previous = self.selected.clone();
-        self.filter = filter;
-        self.rebind_selection(previous.as_deref());
-    }
-
-    fn select_next(&mut self) {
-        let visible = self.visible();
-        if visible.is_empty() {
-            self.selected = None;
-            return;
-        }
-        let pos = self
-            .selected
-            .as_ref()
-            .and_then(|s| visible.iter().position(|p| p == s))
-            .unwrap_or(0);
-        self.selected = Some(visible[(pos + 1) % visible.len()].clone());
-    }
-
-    fn visible(&self) -> Vec<PathBuf> {
-        let needle = self.filter.to_ascii_lowercase();
-        self.order
-            .iter()
-            .filter(|path| {
-                if needle.is_empty() {
-                    return true;
-                }
-                path.strip_prefix(&self.root)
-                    .unwrap_or(path)
-                    .to_string_lossy()
-                    .to_ascii_lowercase()
-                    .contains(&needle)
-            })
-            .cloned()
-            .collect()
-    }
-
-    fn rebuild_order(&mut self) {
-        let mut paths: Vec<PathBuf> = self.entries.keys().cloned().collect();
-        paths.sort_by(|a, b| {
-            let a = a
-                .strip_prefix(&self.root)
-                .unwrap_or(a)
-                .to_string_lossy()
-                .into_owned();
-            let b = b
-                .strip_prefix(&self.root)
-                .unwrap_or(b)
-                .to_string_lossy()
-                .into_owned();
-            natural_cmp(&a, &b)
-        });
-        self.order = paths;
-    }
-
-    fn rebind_selection(&mut self, previous: Option<&Path>) {
-        let visible = self.visible();
-        if let Some(prev) = previous {
-            if visible.iter().any(|p| p == prev) {
-                self.selected = Some(prev.to_path_buf());
-                return;
-            }
-            if self.entries.contains_key(prev) {
-                // Hidden by filter — pick first visible.
-                self.selected = visible.into_iter().next();
-                return;
-            }
-            // Removed: nearby by natural order.
-            if visible.is_empty() {
-                self.selected = None;
-                return;
-            }
-            let pos = self
-                .order
-                .iter()
-                .position(|p| p >= prev)
-                .unwrap_or(self.order.len().saturating_sub(1));
-            let candidate = self
-                .order
-                .get(pos)
-                .cloned()
-                .or_else(|| self.order.last().cloned());
-            if let Some(c) = candidate
-                && visible.iter().any(|p| p == &c)
-            {
-                self.selected = Some(c);
-                return;
-            }
-            self.selected = visible.into_iter().next();
-            return;
-        }
-        self.selected = visible.into_iter().next();
-    }
-
-    fn assert_invariants(&self) {
-        // No duplicates in order.
-        let unique: BTreeSet<_> = self.order.iter().collect();
-        assert_eq!(unique.len(), self.order.len(), "duplicate playlist entries");
-
-        // Order covers exactly the entry map.
-        assert_eq!(self.order.len(), self.entries.len());
-        for path in &self.order {
-            assert!(
-                self.entries.contains_key(path),
-                "order path missing from map: {}",
-                path.display()
-            );
-        }
-
-        // Natural order holds.
-        for pair in self.order.windows(2) {
-            let a = pair[0]
-                .strip_prefix(&self.root)
-                .unwrap_or(&pair[0])
-                .to_string_lossy();
-            let b = pair[1]
-                .strip_prefix(&self.root)
-                .unwrap_or(&pair[1])
-                .to_string_lossy();
-            assert!(
-                natural_cmp(&a, &b) != std::cmp::Ordering::Greater,
-                "natural order violated: {a} > {b}"
-            );
-        }
-
-        // Selection is valid or none.
-        if let Some(selected) = &self.selected {
-            assert!(
-                self.entries.contains_key(selected),
-                "selected path missing: {}",
-                selected.display()
-            );
-        }
-
-        // No ignored extensions.
-        for path in &self.order {
-            let ext = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("")
-                .to_ascii_lowercase();
-            assert!(
-                ext == "json" || ext == "lottie",
-                "non-animation entry present: {}",
-                path.display()
-            );
-        }
-    }
-}
-
-fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
-    let mut ac = a.chars().peekable();
-    let mut bc = b.chars().peekable();
-    loop {
-        match (ac.peek().copied(), bc.peek().copied()) {
-            (None, None) => return std::cmp::Ordering::Equal,
-            (None, Some(_)) => return std::cmp::Ordering::Less,
-            (Some(_), None) => return std::cmp::Ordering::Greater,
-            (Some(a_ch), Some(b_ch)) => {
-                if a_ch.is_ascii_digit() && b_ch.is_ascii_digit() {
-                    let mut an = String::new();
-                    let mut bn = String::new();
-                    while ac.peek().is_some_and(|c| c.is_ascii_digit()) {
-                        an.push(ac.next().unwrap());
-                    }
-                    while bc.peek().is_some_and(|c| c.is_ascii_digit()) {
-                        bn.push(bc.next().unwrap());
-                    }
-                    let av: u128 = an.parse().unwrap_or(u128::MAX);
-                    let bv: u128 = bn.parse().unwrap_or(u128::MAX);
-                    match av.cmp(&bv).then_with(|| an.len().cmp(&bn.len())) {
-                        std::cmp::Ordering::Equal => {}
-                        other => return other,
-                    }
-                } else {
-                    match a_ch
-                        .to_ascii_lowercase()
-                        .cmp(&b_ch.to_ascii_lowercase())
-                        .then_with(|| a_ch.cmp(&b_ch))
-                    {
-                        std::cmp::Ordering::Equal => {
-                            ac.next();
-                            bc.next();
-                        }
-                        other => return other,
-                    }
-                }
-            }
-        }
-    }
-}
-
-fn discover_disk(root: &Path) -> Vec<(PathBuf, bool)> {
-    fn visit(dir: &Path, out: &mut Vec<(PathBuf, bool)>) {
-        let Ok(entries) = fs::read_dir(dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Ok(ft) = entry.file_type() else {
-                continue;
-            };
-            if ft.is_symlink() {
-                // Match product: do not follow directory symlinks; include file symlinks
-                // only when metadata says file.
-                if let Ok(meta) = fs::metadata(&path)
-                    && meta.is_file()
-                {
-                    push_if_animation(&path, out);
-                }
-                continue;
-            }
-            if ft.is_dir() {
-                visit(&path, out);
-            } else if ft.is_file() {
-                push_if_animation(&path, out);
-            }
-        }
-    }
-
-    fn push_if_animation(path: &Path, out: &mut Vec<(PathBuf, bool)>) {
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        if ext != "json" && ext != "lottie" {
-            return;
-        }
-        let bytes = fs::read(path).unwrap_or_default();
-        let corrupt = !is_objectish_json(&bytes);
-        out.push((path.to_path_buf(), corrupt));
-    }
-
-    let mut found = Vec::new();
-    visit(root, &mut found);
-    found
-}
-
-/// Cheap corrupt-file heuristic for stress invariants (not a full Lottie validator).
-fn is_objectish_json(bytes: &[u8]) -> bool {
-    let trimmed = trim_ascii_ws(bytes);
-    trimmed.first() == Some(&b'{') && trimmed.last() == Some(&b'}') && trimmed.len() > 2
-}
-
-fn trim_ascii_ws(bytes: &[u8]) -> &[u8] {
-    let start = bytes
-        .iter()
-        .position(|b| !b.is_ascii_whitespace())
-        .unwrap_or(bytes.len());
-    let end = bytes
-        .iter()
-        .rposition(|b| !b.is_ascii_whitespace())
-        .map_or(0, |i| i + 1);
-    if start >= end {
-        &[]
-    } else {
-        &bytes[start..end]
-    }
-}
+use std::time::{Duration, Instant};
 
 struct XorShift64 {
     state: u64,
@@ -329,9 +35,7 @@ struct XorShift64 {
 
 impl XorShift64 {
     fn new(seed: u64) -> Self {
-        Self {
-            state: seed | 1, // avoid zero state
-        }
+        Self { state: seed | 1 }
     }
 
     fn next_u64(&mut self) -> u64 {
@@ -345,14 +49,19 @@ impl XorShift64 {
 
     fn gen_range(&mut self, max: usize) -> usize {
         if max == 0 {
-            return 0;
+            0
+        } else {
+            (self.next_u64() as usize) % max
         }
-        (self.next_u64() as usize) % max
     }
 }
 
+fn collect_animation_paths(root: &Path) -> Vec<PathBuf> {
+    discover_animations(root).unwrap_or_default()
+}
+
 #[test]
-#[ignore = "five-minute adversarial playlist stress; run with LOT_STRESS_SECS=300 cargo test --test playlist_stress -- --ignored --nocapture"]
+#[ignore = "five-minute production watcher stress; LOT_STRESS_SECS=300 cargo test --test playlist_stress -- --ignored --nocapture"]
 fn adversarial_playlist_churn_for_five_minutes() {
     let secs: u64 = std::env::var("LOT_STRESS_SECS")
         .ok()
@@ -363,30 +72,19 @@ fn adversarial_playlist_churn_for_five_minutes() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(0x10_07);
 
-    let root = std::env::temp_dir().join(format!(
-        "lot-stress-{}-{}",
-        seed,
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    fs::create_dir_all(&root).unwrap();
-
-    // Seed thousands of files (hardlink/copy template content).
-    let seed_count = 2_500usize;
+    let root = temp_dir(&format!("stress-{seed}"));
     let template = root.join("_template.json");
-    fs::write(&template, VALID_JSON).unwrap();
+    fs::write(&template, fixture_json_bytes()).unwrap();
+
+    let seed_count = 2_500usize;
     for i in 0..seed_count {
         let batch = root.join(format!("batch_{:04}", i / 100));
         fs::create_dir_all(&batch).unwrap();
         let dest = batch.join(format!("f{i}.json"));
-        // Prefer hardlink to save disk; fall back to copy.
         if fs::hard_link(&template, &dest).is_err() {
             fs::copy(&template, &dest).unwrap();
         }
     }
-    // Natural-sort stress names.
     for name in [
         "file1.json",
         "file2.json",
@@ -397,251 +95,381 @@ fn adversarial_playlist_churn_for_five_minutes() {
         let dest = root.join(name);
         let _ = fs::hard_link(&template, &dest).or_else(|_| fs::copy(&template, &dest).map(|_| ()));
     }
-    // Corrupt samples.
     for i in 0..50 {
-        fs::write(root.join(format!("corrupt_{i}.json")), b"{bad").unwrap();
+        write_corrupt(&root.join(format!("corrupt_{i}.json")));
     }
-    // Noise that must never enter the playlist.
     fs::write(root.join("readme.txt"), b"noise").unwrap();
     fs::write(root.join("image.png"), b"png").unwrap();
 
-    let playlist = Arc::new(Mutex::new(StressPlaylist::new(root.clone())));
-    {
-        let mut pl = playlist.lock().unwrap();
-        pl.apply_rescan(discover_disk(&root));
-        pl.assert_invariants();
+    let root = root.canonicalize().unwrap();
+    let (rx, session) = spawn_directory_watcher(root.clone()).expect("spawn watcher");
+    let mut playlist = Playlist::new(root.clone());
+    let mut last_generation = 0_u64;
+
+    // Initial scan must arrive from the production watcher (not a manual discover inject).
+    let boot_deadline = Instant::now() + Duration::from_secs(30);
+    let mut booted = false;
+    while Instant::now() < boot_deadline {
+        if let Ok(event) = rx.recv_timeout(Duration::from_millis(200))
+            && apply_playlist_event(&mut playlist, event, &mut last_generation)
+        {
+            booted = true;
+            break;
+        }
     }
+    assert!(
+        booted,
+        "production watcher did not emit initial ScanComplete"
+    );
+    assert!(playlist.len() >= seed_count, "initial playlist too small");
+    assert_playlist_invariants(&playlist);
 
     let stop = Arc::new(AtomicBool::new(false));
+    let pause_churn = Arc::new(AtomicBool::new(false));
     let heartbeat = Arc::new(AtomicU64::new(0));
     let ops = Arc::new(AtomicU64::new(0));
-    let max_batch_ms = Arc::new(AtomicU64::new(0));
-    let max_rescan_ms = Arc::new(AtomicU64::new(0));
-    let max_entries = Arc::new(AtomicU64::new(0));
+    let max_apply_ms = Arc::new(AtomicU64::new(0));
+    let events_applied = Arc::new(AtomicU64::new(0));
 
-    // Watchdog: fail if apply loop stalls for > 5s.
-    let watchdog_stop = Arc::clone(&stop);
-    let watchdog_beat = Arc::clone(&heartbeat);
+    // Watchdog: fail if event processing stalls for >8s while test is running.
+    let wd_stop = Arc::clone(&stop);
+    let wd_beat = Arc::clone(&heartbeat);
     let watchdog = thread::spawn(move || {
         let mut last = 0_u64;
         let mut stalled_since = Instant::now();
-        while !watchdog_stop.load(Ordering::Relaxed) {
+        while !wd_stop.load(Ordering::Relaxed) {
             thread::sleep(Duration::from_millis(200));
-            let beat = watchdog_beat.load(Ordering::Relaxed);
+            let beat = wd_beat.load(Ordering::Relaxed);
             if beat != last {
                 last = beat;
                 stalled_since = Instant::now();
-            } else if stalled_since.elapsed() > Duration::from_secs(5) {
-                panic!("playlist stress watchdog: apply loop unresponsive for >5s");
+            } else if stalled_since.elapsed() > Duration::from_secs(8) {
+                panic!("stress watchdog: event loop unresponsive for >8s");
             }
         }
     });
 
-    // User simulation: search + navigate.
+    // Churn worker: real filesystem operations only.
+    let churn_stop = Arc::clone(&stop);
+    let churn_pause = Arc::clone(&pause_churn);
+    let churn_root = root.clone();
+    let churn_ops = Arc::clone(&ops);
+    let template_path = template.clone();
+    let churn = thread::spawn(move || {
+        let mut rng = XorShift64::new(seed ^ 0xC0FFEE);
+        let mut next_id = seed_count as u64;
+        while !churn_stop.load(Ordering::Relaxed) {
+            if churn_pause.load(Ordering::Relaxed) {
+                thread::sleep(Duration::from_millis(20));
+                continue;
+            }
+            let batch = 30 + rng.gen_range(40);
+            for _ in 0..batch {
+                let roll = rng.gen_range(100);
+                if roll < 28 {
+                    next_id += 1;
+                    let batch_dir = churn_root.join(format!("dyn_{:04}", next_id / 50));
+                    let _ = fs::create_dir_all(&batch_dir);
+                    let dest = batch_dir.join(format!("n{next_id}.json"));
+                    let _ = fs::hard_link(&template_path, &dest)
+                        .or_else(|_| fs::copy(&template_path, &dest).map(|_| ()));
+                } else if roll < 33 {
+                    next_id += 1;
+                    write_corrupt(&churn_root.join(format!("dyn_bad_{next_id}.json")));
+                } else if roll < 50 {
+                    let paths = collect_animation_paths(&churn_root);
+                    if !paths.is_empty() {
+                        let path = &paths[rng.gen_range(paths.len())];
+                        if rng.gen_range(2) == 0 {
+                            let _ = fs::write(path, fixture_json_bytes());
+                        } else {
+                            let _ = fs::write(path, b"{partial");
+                        }
+                    }
+                } else if roll < 65 {
+                    let paths = collect_animation_paths(&churn_root);
+                    if !paths.is_empty() {
+                        let from = paths[rng.gen_range(paths.len())].clone();
+                        next_id += 1;
+                        let to = churn_root.join(format!("renamed_{next_id}.json"));
+                        let _ = fs::rename(&from, &to);
+                    }
+                } else if roll < 82 {
+                    let paths = collect_animation_paths(&churn_root);
+                    if paths.len() > 200 {
+                        let path = &paths[rng.gen_range(paths.len())];
+                        let _ = fs::remove_file(path);
+                    }
+                } else if roll < 88 {
+                    next_id += 1;
+                    let _ = fs::write(churn_root.join(format!("noise_{next_id}.tmp")), b"x");
+                } else if roll < 94 {
+                    next_id += 1;
+                    let dir = churn_root
+                        .join("nested")
+                        .join(format!("d{next_id}"))
+                        .join("deep");
+                    let _ = fs::create_dir_all(&dir);
+                    let dest = dir.join(format!("deep_{next_id}.json"));
+                    let _ = fs::hard_link(&template_path, &dest)
+                        .or_else(|_| fs::copy(&template_path, &dest).map(|_| ()));
+                } else {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::symlink;
+                        next_id += 1;
+                        let loop_dir = churn_root.join(format!("loop_{next_id}"));
+                        let _ = fs::create_dir_all(&loop_dir);
+                        let _ = symlink(&churn_root, loop_dir.join("up"));
+                    }
+                }
+                churn_ops.fetch_add(1, Ordering::Relaxed);
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+    });
+
+    // Shared playlist for optional user thread — use mutex for concurrent select/filter.
+    let shared = Arc::new(Mutex::new(Playlist::new(root.clone())));
+    {
+        let mut g = shared.lock().unwrap();
+        *g = playlist.clone();
+    }
+
     let user_stop = Arc::clone(&stop);
-    let user_pl = Arc::clone(&playlist);
-    let user_ops = Arc::clone(&ops);
+    let user_pl = Arc::clone(&shared);
     let user = thread::spawn(move || {
-        let mut rng = XorShift64::new(seed ^ 0xabc);
+        let mut rng = XorShift64::new(seed ^ 0xA11);
         while !user_stop.load(Ordering::Relaxed) {
             {
                 let mut pl = user_pl.lock().unwrap();
-                match rng.gen_range(4) {
+                match rng.gen_range(5) {
                     0 => pl.set_filter(String::new()),
-                    1 => pl.set_filter("f1".into()),
-                    2 => pl.set_filter("batch_00".into()),
-                    _ => pl.set_filter("zzz_nope".into()),
+                    1 => pl.set_filter("f1"),
+                    2 => pl.set_filter("batch_00"),
+                    3 => pl.set_filter("zzz_nope"),
+                    _ => pl.set_filter("corrupt"),
                 }
-                pl.select_next();
-                // Selecting a corrupt entry must not panic.
-                if let Some(sel) = pl.selected.clone() {
-                    let _ = pl.entries.get(&sel).map(|e| e.corrupt);
+                pl.select_next(true);
+                if let Some(path) = pl.selected_path().map(Path::to_path_buf) {
+                    // Corrupt files must not panic the loader.
+                    let _ = LoadedInput::from_path(&path);
                 }
-                pl.assert_invariants();
+                assert_playlist_invariants(&pl);
             }
-            user_ops.fetch_add(1, Ordering::Relaxed);
-            thread::sleep(Duration::from_millis(20 + (rng.gen_range(30) as u64)));
+            thread::sleep(Duration::from_millis(25 + rng.gen_range(40) as u64));
         }
     });
 
     let deadline = Instant::now() + Duration::from_secs(secs);
-    let mut rng = XorShift64::new(seed);
-    let mut next_id = seed_count as u64;
-    let mut rescan_every = Instant::now() + Duration::from_secs(5);
+    let mut last_reconcile = Instant::now();
 
     println!(
-        "playlist stress starting: secs={secs} seed={seed} root={}",
+        "playlist stress (PRODUCTION watcher) starting: secs={secs} seed={seed} root={}",
         root.display()
     );
 
     while Instant::now() < deadline {
-        let batch_start = Instant::now();
-        let batch_ops = 40 + rng.gen_range(40);
+        let apply_start = Instant::now();
 
-        for _ in 0..batch_ops {
-            let roll = rng.gen_range(100);
-            if roll < 30 {
-                // Create valid
-                next_id += 1;
-                let batch = root.join(format!("dyn_{:04}", next_id / 50));
-                let _ = fs::create_dir_all(&batch);
-                let dest = batch.join(format!("n{next_id}.json"));
-                let _ = fs::hard_link(&template, &dest)
-                    .or_else(|_| fs::copy(&template, &dest).map(|_| ()));
-            } else if roll < 35 {
-                // Create corrupt
-                next_id += 1;
-                let dest = root.join(format!("dyn_bad_{next_id}.json"));
-                let _ = fs::write(&dest, b"{");
-            } else if roll < 50 {
-                // Modify random existing json
-                if let Ok(paths) = collect_animation_paths(&root)
-                    && !paths.is_empty()
-                {
-                    let path = &paths[rng.gen_range(paths.len())];
-                    if rng.gen_range(2) == 0 {
-                        let _ = fs::write(path, VALID_JSON);
-                    } else {
-                        let _ = fs::write(path, b"{partial");
+        // Drain watcher events — this is the only path that mutates the authoritative playlist.
+        loop {
+            match rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(event) => {
+                    if apply_playlist_event(&mut playlist, event, &mut last_generation) {
+                        events_applied.fetch_add(1, Ordering::Relaxed);
+                        assert_playlist_invariants(&playlist);
+                        if let Ok(mut g) = shared.lock() {
+                            *g = playlist.clone();
+                        }
                     }
                 }
-            } else if roll < 65 {
-                // Rename
-                if let Ok(paths) = collect_animation_paths(&root)
-                    && !paths.is_empty()
-                {
-                    let from = paths[rng.gen_range(paths.len())].clone();
-                    next_id += 1;
-                    let to = root.join(format!("renamed_{next_id}.json"));
-                    let _ = fs::rename(&from, &to);
-                }
-            } else if roll < 85 {
-                // Delete
-                if let Ok(paths) = collect_animation_paths(&root)
-                    && paths.len() > 100
-                {
-                    let path = &paths[rng.gen_range(paths.len())];
-                    let _ = fs::remove_file(path);
-                }
-            } else if roll < 90 {
-                // Noise file
-                next_id += 1;
-                let _ = fs::write(root.join(format!("noise_{next_id}.tmp")), b"x");
-            } else if roll < 95 {
-                // Nested directory create
-                next_id += 1;
-                let dir = root.join("nested").join(format!("d{next_id}")).join("deep");
-                let _ = fs::create_dir_all(&dir);
-                let dest = dir.join(format!("deep_{next_id}.json"));
-                let _ = fs::hard_link(&template, &dest)
-                    .or_else(|_| fs::copy(&template, &dest).map(|_| ()));
-            } else {
-                // Symlink cycle attempt (unix)
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::symlink;
-                    next_id += 1;
-                    let loop_dir = root.join(format!("loop_{next_id}"));
-                    let _ = fs::create_dir_all(&loop_dir);
-                    let _ = symlink(&root, loop_dir.join("up"));
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    panic!("watcher channel disconnected unexpectedly");
                 }
             }
-            ops.fetch_add(1, Ordering::Relaxed);
+            if apply_start.elapsed() > Duration::from_millis(500) {
+                break;
+            }
         }
 
-        // Apply full rescan to playlist model (ground-truth journal mode).
-        let rescan_start = Instant::now();
-        let disk = discover_disk(&root);
-        let rescan_ms = rescan_start.elapsed().as_millis() as u64;
-        max_rescan_ms.fetch_max(rescan_ms, Ordering::Relaxed);
+        let apply_ms = apply_start.elapsed().as_millis() as u64;
+        max_apply_ms.fetch_max(apply_ms, Ordering::Relaxed);
         assert!(
-            rescan_ms < 10_000,
-            "rescan too slow: {rescan_ms}ms (unresponsive scan)"
+            apply_ms < 5_000,
+            "event processing batch too slow: {apply_ms}ms"
         );
-
-        {
-            let mut pl = playlist.lock().unwrap();
-            pl.apply_rescan(disk);
-            pl.assert_invariants();
-            max_entries.fetch_max(pl.entries.len() as u64, Ordering::Relaxed);
-        }
-
-        let batch_ms = batch_start.elapsed().as_millis() as u64;
-        max_batch_ms.fetch_max(batch_ms, Ordering::Relaxed);
-        assert!(batch_ms < 15_000, "batch apply too slow: {batch_ms}ms");
-
         heartbeat.fetch_add(1, Ordering::Relaxed);
 
-        if Instant::now() >= rescan_every {
-            // Extra invariant: disk discovery matches playlist after apply.
-            let disk = discover_disk(&root);
-            let pl = playlist.lock().unwrap();
-            assert_eq!(pl.entries.len(), disk.len(), "stale playlist vs disk");
-            for (path, _) in &disk {
-                assert!(
-                    pl.entries.contains_key(path),
-                    "disk path missing from playlist: {}",
-                    path.display()
+        // Main-thread user interactions on the authoritative playlist as well.
+        match (ops.load(Ordering::Relaxed) as usize) % 7 {
+            0 => playlist.set_filter(String::new()),
+            1 => playlist.set_filter("f1"),
+            2 => playlist.set_filter("deep_"),
+            3 => {
+                playlist.set_filter(String::new());
+                playlist.select_next(true);
+            }
+            4 => playlist.select_previous(true),
+            5 => {
+                if let Some(path) = playlist.selected_path().map(Path::to_path_buf) {
+                    let _ = LoadedInput::from_path(&path);
+                }
+            }
+            _ => {}
+        }
+        assert_playlist_invariants(&playlist);
+
+        // Periodic reconciliation against production discovery after a forced rescan.
+        if last_reconcile.elapsed() > Duration::from_secs(5) {
+            pause_churn.store(true, Ordering::Relaxed);
+            thread::sleep(Duration::from_millis(100)); // let in-flight churn ops finish
+
+            let gen_before = last_generation;
+            // Nudge the watched tree so notify emits at least one event after the pause.
+            let tick = root.join(".lot-stress-tick");
+            let _ = fs::write(
+                &tick,
+                format!("{}", Instant::now().elapsed().as_nanos()).as_bytes(),
+            );
+
+            let settle_deadline = Instant::now() + Duration::from_secs(4);
+            while Instant::now() < settle_deadline {
+                if let Ok(event) = rx.recv_timeout(Duration::from_millis(50))
+                    && apply_playlist_event(&mut playlist, event, &mut last_generation)
+                {
+                    events_applied.fetch_add(1, Ordering::Relaxed);
+                }
+                if last_generation > gen_before {
+                    // One more quiet half-second to catch trailing debounced scans.
+                    let quiet = Instant::now() + Duration::from_millis(700);
+                    while Instant::now() < quiet {
+                        if let Ok(event) = rx.recv_timeout(Duration::from_millis(50))
+                            && apply_playlist_event(&mut playlist, event, &mut last_generation)
+                        {
+                            events_applied.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                    break;
+                }
+            }
+
+            while let Ok(event) = rx.try_recv() {
+                if apply_playlist_event(&mut playlist, event, &mut last_generation) {
+                    events_applied.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+
+            let filter = playlist.filter().to_owned();
+            playlist.set_filter(String::new());
+            let truth = discover_animations(&root).expect("discover_animations");
+            let truth_set: std::collections::BTreeSet<_> = truth.into_iter().collect();
+            let pl_set = playlist_path_set(&playlist);
+            if pl_set != truth_set {
+                // One recovery pass: force another tick and rescan window.
+                let gen2 = last_generation;
+                let _ = fs::write(&tick, b"retry");
+                let retry_deadline = Instant::now() + Duration::from_secs(3);
+                while Instant::now() < retry_deadline {
+                    if let Ok(event) = rx.recv_timeout(Duration::from_millis(50))
+                        && apply_playlist_event(&mut playlist, event, &mut last_generation)
+                    {
+                        events_applied.fetch_add(1, Ordering::Relaxed);
+                    }
+                    if last_generation > gen2 {
+                        break;
+                    }
+                }
+                while let Ok(event) = rx.try_recv() {
+                    if apply_playlist_event(&mut playlist, event, &mut last_generation) {
+                        events_applied.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+                playlist.set_filter(String::new());
+                let truth = discover_animations(&root).expect("discover_animations");
+                let truth_set: std::collections::BTreeSet<_> = truth.into_iter().collect();
+                let pl_set = playlist_path_set(&playlist);
+                let only_pl: Vec<_> = pl_set.difference(&truth_set).take(5).collect();
+                let only_disk: Vec<_> = truth_set.difference(&pl_set).take(5).collect();
+                assert_eq!(
+                    pl_set, truth_set,
+                    "playlist diverged from production discover_animations; only_in_playlist≈{only_pl:?} only_on_disk≈{only_disk:?}"
                 );
             }
-            rescan_every = Instant::now() + Duration::from_secs(5);
+            for path in playlist.entries() {
+                assert!(
+                    path.path.exists(),
+                    "stale playlist entry: {}",
+                    path.path.display()
+                );
+            }
+            playlist.set_filter(filter);
+            assert_playlist_invariants(&playlist);
+            last_reconcile = Instant::now();
+            pause_churn.store(false, Ordering::Relaxed);
             println!(
-                "stress progress: elapsed={:.0}s ops={} entries={} max_batch_ms={} max_rescan_ms={}",
+                "stress progress: elapsed={:.0}s ops={} events={} entries={} gen={} max_apply_ms={}",
                 secs as f64
                     - deadline
                         .saturating_duration_since(Instant::now())
                         .as_secs_f64(),
                 ops.load(Ordering::Relaxed),
-                pl.entries.len(),
-                max_batch_ms.load(Ordering::Relaxed),
-                max_rescan_ms.load(Ordering::Relaxed),
+                events_applied.load(Ordering::Relaxed),
+                playlist.len(),
+                last_generation,
+                max_apply_ms.load(Ordering::Relaxed),
             );
         }
     }
 
     stop.store(true, Ordering::Relaxed);
+    let _ = churn.join();
     let _ = user.join();
     let _ = watchdog.join();
 
-    // Final reconciliation.
-    let disk = discover_disk(&root);
-    let pl = playlist.lock().unwrap();
-    pl.assert_invariants();
-    assert_eq!(pl.entries.len(), disk.len());
-
-    println!(
-        "playlist stress PASS: ops={} max_entries={} max_batch_ms={} max_rescan_ms={} final_entries={}",
-        ops.load(Ordering::Relaxed),
-        max_entries.load(Ordering::Relaxed),
-        max_batch_ms.load(Ordering::Relaxed),
-        max_rescan_ms.load(Ordering::Relaxed),
-        pl.entries.len(),
+    // Final quiet settle: drain remaining watcher events.
+    let settle = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < settle {
+        if let Ok(event) = rx.recv_timeout(Duration::from_millis(100)) {
+            let _ = apply_playlist_event(&mut playlist, event, &mut last_generation);
+        }
+    }
+    playlist.set_filter(String::new());
+    let truth = discover_animations(&root).unwrap();
+    assert_eq!(
+        playlist_path_set(&playlist),
+        truth.into_iter().collect(),
+        "final reconcile failed"
+    );
+    assert_playlist_invariants(&playlist);
+    assert!(
+        events_applied.load(Ordering::Relaxed) > 0,
+        "no watcher events applied — stress did not exercise production watcher"
+    );
+    assert!(
+        last_generation >= 1,
+        "generation never advanced from production watcher"
     );
 
-    drop(pl);
-    let _ = fs::remove_dir_all(&root);
-}
+    // WatcherSession Drop joins the worker thread.
+    let stop_start = Instant::now();
+    drop(session);
+    drop(rx);
+    assert!(
+        stop_start.elapsed() < Duration::from_secs(5),
+        "watcher session did not stop promptly"
+    );
 
-fn collect_animation_paths(root: &Path) -> std::io::Result<Vec<PathBuf>> {
-    let mut out = Vec::new();
-    fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
-        for entry in fs::read_dir(dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            let ft = entry.file_type()?;
-            if ft.is_dir() && !ft.is_symlink() {
-                walk(&path, out)?;
-            } else if ft.is_file()
-                && let Some(ext) = path.extension().and_then(|e| e.to_str())
-            {
-                let lower = ext.to_ascii_lowercase();
-                if lower == "json" || lower == "lottie" {
-                    out.push(path);
-                }
-            }
-        }
-        Ok(())
-    }
-    walk(root, &mut out)?;
-    Ok(out)
+    println!(
+        "playlist stress PASS (production): ops={} events={} max_entries={} gen={} max_apply_ms={} final_entries={}",
+        ops.load(Ordering::Relaxed),
+        events_applied.load(Ordering::Relaxed),
+        playlist.len(),
+        last_generation,
+        max_apply_ms.load(Ordering::Relaxed),
+        playlist.len(),
+    );
+
+    let _ = fs::remove_dir_all(&root);
 }
