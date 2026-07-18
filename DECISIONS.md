@@ -1,5 +1,12 @@
 # Decisions
 
+## 2026-07-18 — Library target for production-backed playlist tests
+
+`lot` exposes a `lib` target (`src/lib.rs`) so integration tests import real
+`playlist::{discover_animations, Playlist, spawn_directory_watcher}` APIs. Stress and
+watcher tests must apply only `PlaylistEvent::ScanComplete` from the production watcher
+(not mirrored disk walks). Search matches **filename only**, not parent path segments.
+
 ## 2026-07-18 — Directory playlist with full-rescan watching
 
 Directory inputs open an interactive playlist rather than loading a single file. Discovery walks
