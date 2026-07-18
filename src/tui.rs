@@ -48,6 +48,11 @@ pub fn run(input: LoadedInput) -> Result<()> {
     result
 }
 
+/// Open a directory as a searchable, watchable animation playlist.
+pub fn run_directory(root: std::path::PathBuf) -> Result<()> {
+    crate::tui_playlist::run(root)
+}
+
 fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     input: LoadedInput,

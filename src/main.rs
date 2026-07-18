@@ -1,15 +1,9 @@
-mod app;
-mod cli;
-mod input;
-mod render;
-mod tui;
-
-pub mod terminal;
-
 use anyhow::Result;
 use clap::Parser;
+use lot::app;
+use lot::cli::Command;
 
 fn main() -> Result<()> {
-    let command = cli::Command::parse();
+    let command = Command::parse();
     app::run(command)
 }

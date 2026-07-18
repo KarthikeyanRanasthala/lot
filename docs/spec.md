@@ -2,16 +2,21 @@
 
 ## Inputs
 
-`lot` accepts a local dotLottie file, Lottie JSON file, or URL:
+`lot` accepts a local dotLottie file, Lottie JSON file, directory of animations, or URL:
 
 ```sh
 lot animation.lottie
 lot animation.json
+lot ./animations
 lot <url>
 ```
 
 URL loading should report download progress. dotLottie containers and standalone JSON are
-validated with dotlottie-rs before entering the TUI.
+validated with dotlottie-rs before entering the TUI (or on selection in directory mode).
+
+Directory mode recursively discovers `.json` and `.lottie` files, presents a searchable playlist,
+watches for filesystem changes, and isolates per-file load errors. Headless mode does not accept
+directories.
 
 The headless interface is:
 
