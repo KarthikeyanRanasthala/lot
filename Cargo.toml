@@ -11,6 +11,7 @@ base64 = "0.22.1"
 clap = { version = "4.5.60", default-features = false, features = ["derive", "error-context", "help", "std", "usage"] }
 crossterm = "0.29.0"
 dotlottie-rs = { path = "deps/dotlottie-rs/dotlottie-rs", default-features = false, features = ["theming", "tvg-cpu", "tvg-jpg", "tvg-lottie-expressions", "tvg-otf", "tvg-png", "tvg-ttf", "tvg-webp"] }
+notify = "7.0.0"
 ratatui = { version = "0.30.0", default-features = false, features = ["crossterm"] }
 serde_json = "1.0.149"
 ureq = { version = "3.2.0", default-features = false, features = ["rustls"] }

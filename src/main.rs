@@ -1,8 +1,10 @@
 mod app;
 mod cli;
 mod input;
+mod playlist;
 mod render;
 mod tui;
+mod tui_playlist;
 
 pub mod terminal;
 

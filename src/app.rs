@@ -1,8 +1,23 @@
 use crate::{cli::Command, input::LoadedInput, render::headless, tui};
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use std::io;
+use std::path::Path;
 
 pub fn run(command: Command) -> Result<()> {
+    if let Some(path) = command.local_path()
+        && path.is_dir()
+    {
+        if command.headless {
+            bail!(
+                "directory playlist mode requires an interactive terminal; \
+                 headless mode only accepts a single animation file or URL \
+                 (received directory `{}`)",
+                path.display()
+            );
+        }
+        return tui::run_directory(path);
+    }
+
     let loaded = load_input(&command)?;
 
     if command.headless {
@@ -14,6 +29,7 @@ pub fn run(command: Command) -> Result<()> {
 
 fn load_input(command: &Command) -> Result<LoadedInput> {
     if let Some(path) = command.local_path() {
+        ensure_local_animation_path(&path)?;
         LoadedInput::from_path(&path).with_context(|| format!("could not load {}", path.display()))
     } else {
         LoadedInput::from_url(&command.input, |downloaded, total| {
@@ -21,6 +37,19 @@ fn load_input(command: &Command) -> Result<LoadedInput> {
         })
         .with_context(|| format!("could not download {}", command.input))
     }
+}
+
+fn ensure_local_animation_path(path: &Path) -> Result<()> {
+    if !path.exists() {
+        bail!("path does not exist: {}", path.display());
+    }
+    if path.is_dir() {
+        bail!(
+            "expected a .json/.lottie file or URL, found directory `{}`",
+            path.display()
+        );
+    }
+    Ok(())
 }
 
 fn format_bytes(bytes: u64) -> String {

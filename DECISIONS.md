@@ -1,5 +1,20 @@
 # Decisions
 
+## 2026-07-18 — Directory playlist with full-rescan watching
+
+Directory inputs open an interactive playlist rather than loading a single file. Discovery walks
+the real tree only (directory symlinks are not followed) to avoid recursion loops, filters by
+case-insensitive `.json`/`.lottie` extensions, and sorts relative paths with natural alphanumeric
+order. Content validation runs on selection, not during scan, so large trees stay responsive and
+corrupt files remain listed with a soft error.
+
+Filesystem updates use `notify` on a background thread with debounce (~200 ms) and a minimum scan
+gap (~500 ms). Each update performs a full rescan and a monotonic generation counter so stale
+scans cannot overwrite newer results. The TUI drains events with `try_recv` on the existing ~16 ms
+loop so discovery and watching never block rendering or input. Selection is path-identity based:
+unchanged paths keep their place; removed selections rebind to a nearby neighbor; mtime changes
+reload the current file. Headless mode rejects directories because the playlist requires a TUI.
+
 ## 2026-07-15 — Publish native Homebrew bottles with the source release
 
 `lot` remains a Homebrew formula in `KarthikeyanRanasthala/tap`. Its release

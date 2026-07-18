@@ -5,7 +5,7 @@ use std::path::PathBuf;
 #[derive(Debug, Parser)]
 #[command(version, about)]
 pub struct Command {
-    /// A local .json/.lottie file or an http(s) URL.
+    /// A local .json/.lottie file, a directory of animations, or an http(s) URL.
     pub input: String,
 
     /// Write one animation pass as raw RGBA frames to standard output.
