@@ -45,7 +45,6 @@ impl Playlist {
         &self.filter
     }
 
-    #[cfg(test)]
     pub fn entries(&self) -> &[PlaylistEntry] {
         &self.entries
     }
@@ -62,8 +61,6 @@ impl Playlist {
         self.filtered.len()
     }
 
-    #[cfg(test)]
-    #[allow(dead_code)]
     pub fn selected_index(&self) -> Option<usize> {
         self.selected
     }
@@ -111,7 +108,12 @@ impl Playlist {
                 .iter()
                 .position(|entry| entry.path == previous_path)
             {
-                self.selected = Some(index);
+                // Selection must remain visible under the active filter.
+                if self.filtered.contains(&index) {
+                    self.selected = Some(index);
+                } else {
+                    self.selected = self.filtered.first().copied();
+                }
             } else {
                 self.selected = self.nearby_after_removal(previous_index);
             }
@@ -190,7 +192,6 @@ impl Playlist {
         }
     }
 
-    #[cfg(test)]
     pub fn select_filtered_index(&mut self, filtered_index: usize) {
         if let Some(&entry_index) = self.filtered.get(filtered_index) {
             self.selected = Some(entry_index);
@@ -218,6 +219,7 @@ impl Playlist {
             return;
         }
 
+        // Search matches the filename only (not parent directory path components).
         self.filtered = self
             .entries
             .iter()
@@ -225,9 +227,9 @@ impl Playlist {
             .filter(|(_, entry)| {
                 entry
                     .relative
-                    .to_string_lossy()
-                    .to_ascii_lowercase()
-                    .contains(&needle)
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_ascii_lowercase())
+                    .is_some_and(|name| name.contains(&needle))
             })
             .map(|(index, _)| index)
             .collect();
@@ -300,6 +302,23 @@ mod tests {
             .map(|(_, e)| e.display_name())
             .collect();
         assert_eq!(visible, vec!["alpha.json", "alphabet.json"]);
+    }
+
+    #[test]
+    fn search_matches_filename_only_not_parent_directory() {
+        let mut playlist = playlist_with(&[
+            "icons/loader.json",
+            "other/icons.json",
+            "icons/spinner.json",
+        ]);
+        // "icons" appears only as a directory name for loader/spinner; the file
+        // basename match is solely other/icons.json.
+        playlist.set_filter("icons");
+        let visible: Vec<_> = playlist
+            .visible_entries()
+            .map(|(_, e)| e.display_name())
+            .collect();
+        assert_eq!(visible, vec!["other/icons.json"]);
     }
 
     #[test]

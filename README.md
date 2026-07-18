@@ -71,7 +71,7 @@ error because the playlist UI is interactive-only.
 ### Directory playlist
 
 - Up / Down or mouse wheel — move through the focused list (playlist, animations, or themes)
-- `/` — enter search mode and filter the playlist by filename (substring, case-insensitive)
+- `/` — enter search mode and filter the playlist by **filename only** (substring, case-insensitive; parent directory names are not matched)
 - Enter or Esc — leave search mode (filter remains until cleared with Backspace)
 - Tab — cycle focus between the playlist and, for dotLottie selections, animations/themes
 - Space — pause or resume playback of the loaded file
